@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Voice control</title>
+<link rel="stylesheet" href="panel.css">
+</head>
+<body>
+  <header>
+    <button id="toggle" class="mic" aria-pressed="false">
+      <span class="dot"></span><span id="toggle-label">Start listening</span>
+    </button>
+    <span id="status" class="status">idle</span>
+  </header>
+
+  <p id="heard" class="heard" aria-live="polite"></p>
+
+  <div id="prompt" class="prompt" hidden>
+    <p id="prompt-text"></p>
+    <div id="prompt-actions" class="actions"></div>
+  </div>
+
+  <ul id="log" class="log" aria-live="polite"></ul>
+
+  <footer>
+    <span id="usage"></span>
+    <span class="hint">Keep this window open — it holds the microphone.</span>
+  </footer>
+
+  <script type="module" src="panel.js"></script>
+</body>
+</html>

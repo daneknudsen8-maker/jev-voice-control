@@ -1,0 +1,11 @@
+{
+  "name": "jev-voice-proxy",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local proxy that holds the TypeSafe API key for the jev voice extension",
+  "scripts": {
+    "start": "node --env-file=../.env server.js"
+  },
+  "engines": { "node": ">=20" }
+}

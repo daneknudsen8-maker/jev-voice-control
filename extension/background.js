@@ -1,0 +1,230 @@
+// Orchestrator. Owns tab operations and all traffic to the proxy.
+// The panel sends transcripts here; this decides what happens.
+
+import { buildCommandQuestions, matchLocalCommand, resolveCommand } from "./commands.js";
+import "./open-panel.js";
+
+const PROXY = "http://127.0.0.1:8787/systemone";
+const MODEL = "jev-latest";
+
+let lastUsage = null;
+
+async function askJev(state, questions) {
+  const started = performance.now();
+  const res = await fetch(PROXY, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ state, model: MODEL, questions }),
+  });
+
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    if (res.status === 401) throw new Error("TypeSafe rejected the API key (401). Check .env.");
+    if (res.status === 429) throw new Error("Rate limited (429). Slow down.");
+    if (res.status === 403) throw new Error("Proxy refused this extension. Check JEV_ALLOWED_EXTENSION_ID.");
+    throw new Error(`Proxy ${res.status}: ${detail.slice(0, 160)}`);
+  }
+
+  const json = await res.json();
+  lastUsage = { ...json.usage, ms: Math.round(performance.now() - started), model: json.model };
+  return json.answers;
+}
+
+async function activeTab() {
+  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (!tab) throw new Error("no active tab");
+  return tab;
+}
+
+async function talkToPage(tabId, message) {
+  try {
+    return await chrome.tabs.sendMessage(tabId, message);
+  } catch {
+    // Content script not injected yet (or the page was just loaded).
+    await chrome.scripting.executeScript({ target: { tabId }, files: ["content.js"] });
+    return await chrome.tabs.sendMessage(tabId, message);
+  }
+}
+
+async function openTabs(currentId) {
+  const tabs = await chrome.tabs.query({ currentWindow: true });
+  return tabs
+    .filter((t) => t.id !== currentId)
+    .slice(0, 20)
+    .map((t) => ({
+      id: `t${t.id}`,
+      title: (t.title ?? "").slice(0, 80),
+      host: (() => { try { return new URL(t.url).host; } catch { return ""; } })(),
+    }));
+}
+
+/** Handle a finished utterance. Returns a report for the panel to render. */
+async function handleUtterance(transcript) {
+  // Assistant meta-commands never reach the model.
+  const local = matchLocalCommand(transcript);
+  if (local) return { kind: "stop", message: "listening paused", local: true };
+
+  const tab = await activeTab();
+
+  if (!tab.url || /^(chrome|edge|about|chrome-extension|devtools):/.test(tab.url)) {
+    return { kind: "error", message: "I can't read this page (browser internal page). Switch to a normal site." };
+  }
+
+  const [inv, tabs] = await Promise.all([
+    talkToPage(tab.id, { type: "inventory", utterance: transcript }),
+    openTabs(tab.id),
+  ]);
+
+  const state = {
+    utterance: transcript,
+    page: inv.page,
+    elements: inv.elements,
+    typeables: inv.typeables,
+    open_tabs: tabs,
+  };
+
+  const questions = buildCommandQuestions({ elements: inv.elements, tabs, typeables: inv.typeables });
+  const answers = await askJev(state, questions);
+
+  const decision = resolveCommand(answers, {
+    transcript,
+    elements: inv.elements,
+    typeables: inv.typeables,
+    tabs,
+  });
+
+  return { ...(await carryOut(decision, tab, transcript)), answers, usage: lastUsage, decision };
+}
+
+async function carryOut(decision, tab, transcript) {
+  switch (decision.kind) {
+    case "ignore":
+      return { kind: "ignored", message: decision.reason };
+
+    case "clarify":
+      return { kind: "clarify", message: decision.say, debug: decision.debug };
+
+    case "choose":
+      return { kind: "choose", message: decision.say, options: decision.options, debug: decision.debug };
+
+    case "confirm":
+      pending = { command: decision.command, tabId: tab.id };
+      return { kind: "confirm", message: decision.say, risk: decision.risk };
+
+    case "ask_page":
+      return await answerAboutPage(tab, transcript);
+
+    case "execute":
+      return await run(decision.command, tab.id);
+
+    default:
+      return { kind: "error", message: `unknown decision ${decision.kind}` };
+  }
+}
+
+let pending = null;
+
+async function run(command, tabId) {
+  switch (command.do) {
+    case "navigate":
+      await chrome.tabs.update(tabId, { url: command.url });
+      return { kind: "done", message: `going to ${new URL(command.url).host}` };
+
+    case "new_tab":
+      await chrome.tabs.create({});
+      return { kind: "done", message: "new tab" };
+
+    case "close_tab": {
+      const id = command.id === "current" ? tabId : Number(command.id.slice(1));
+      await chrome.tabs.remove(id);
+      return { kind: "done", message: "closed tab" };
+    }
+
+    case "switch_tab": {
+      const id = Number(command.id.slice(1));
+      await chrome.tabs.update(id, { active: true });
+      return { kind: "done", message: "switched tab" };
+    }
+
+    case "stop_listening":
+      return { kind: "stop", message: "listening paused" };
+
+    default: {
+      const result = await talkToPage(tabId, { type: "execute", command });
+      return result.ok
+        ? { kind: "done", message: result.did }
+        : { kind: "error", message: result.error };
+    }
+  }
+}
+
+// ask_page: a second request, justified because its state is page prose rather
+// than page controls, and it only exists on this branch.
+async function answerAboutPage(tab, question) {
+  const { sections, page } = await talkToPage(tab.id, { type: "sections" });
+  if (!sections.length) return { kind: "error", message: "nothing readable on this page" };
+
+  const answers = await askJev(
+    { question, page, sections },
+    {
+      answered: {
+        type: "noul",
+        instructions: "Do the entries in `sections` contain enough to answer `question`?",
+        criteria: {
+          true: "At least one section directly addresses the question",
+          false: "The page is about something else, or only mentions it in passing without answering",
+        },
+      },
+      best_section: {
+        type: "choice",
+        instructions: {
+          question: "Which entry in `sections` best answers `question`?",
+          focus: "Pick the section a person would be shown. Prefer the one that answers over one that merely mentions the topic.",
+        },
+        criteria: {
+          ...Object.fromEntries(sections.map((s) => [s.id, s.text.slice(0, 200)])),
+          none: "No section answers the question",
+        },
+      },
+    },
+  );
+
+  const answered = answers.answered.noul;
+  const best = answers.best_section;
+
+  if (answered < 0.45 || best.choice === "none") {
+    return { kind: "answer", message: "I don't think this page answers that.", usage: lastUsage, answers };
+  }
+
+  await talkToPage(tab.id, { type: "execute", command: { do: "highlight", id: best.choice } });
+  const section = sections.find((s) => s.id === best.choice);
+  return {
+    kind: "answer",
+    message: section?.text ?? "found it",
+    certainty: answered,
+    confidence: best.confidence,
+    usage: lastUsage,
+    answers,
+  };
+}
+
+chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
+  (async () => {
+    try {
+      if (msg.type === "utterance") {
+        respond(await handleUtterance(msg.transcript));
+      } else if (msg.type === "confirm") {
+        if (!pending) return respond({ kind: "error", message: "nothing to confirm" });
+        const { command, tabId } = pending;
+        pending = null;
+        respond(msg.yes ? await run(command, tabId) : { kind: "ignored", message: "cancelled" });
+      } else if (msg.type === "pick") {
+        const tab = await activeTab();
+        respond(await run({ do: "click", id: msg.id }, tab.id));
+      }
+    } catch (error) {
+      respond({ kind: "error", message: error.message });
+    }
+  })();
+  return true; // async response
+});
