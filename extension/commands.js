@@ -246,6 +246,27 @@ const NAME_MATCH_FLOOR = 0.15;
 const SITE_NAME_COMMAND_FLOOR = 0.30;
 const SITE_NAME_CONFIRMATION = 0.75;
 
+/**
+ * A verb said outright. "Click on CMC email" is an instruction about THIS page;
+ * it must never turn into switching to some tab that happens to have CMC email
+ * open. The action Choice sees a matching tab and reasonably wants to switch,
+ * so the explicit verb has to win before that judgment is consulted.
+ *
+ * Only unambiguous verbs. "open" is deliberately absent: "open gmail" really
+ * can mean the tab.
+ */
+const EXPLICIT_VERBS = [
+  [/^(?:please\s+)?(?:click|press|tap|hit|push|select)\b/i, "click"],
+  [/^(?:please\s+)?(?:scroll)\b/i, "scroll"],
+  [/^(?:please\s+)?(?:reload|refresh)\b/i, "reload"],
+];
+
+export function matchExplicitVerb(transcript) {
+  const said = transcript.trim();
+  for (const [pattern, action] of EXPLICIT_VERBS) if (pattern.test(said)) return action;
+  return null;
+}
+
 // Confidence floors, scaled to consequence — docs/typesafe/00-core.md.
 // Below the floor we ask rather than act.
 const FLOORS = {
@@ -290,6 +311,24 @@ export function resolveCommand(answers, ctx) {
     return { kind: "clarify", why: "no_page", say: "There's no page open yet — try 'go to' a website first.",
              detail: `action=${action.choice} needs page content; current tab is not readable` };
   }
+  // An explicit verb outranks the action judgment. Said before anything is
+  // resolved, so a matching tab cannot hijack "click".
+  const spokenVerb = matchExplicitVerb(transcript);
+  if (spokenVerb === "click" && ["switch_tab", "navigate", "new_tab"].includes(action.choice)) {
+    const here = onPage(0.5);
+    if (here) {
+      return { kind: "execute", command: { do: "click", id: here.id }, why: "explicit_click",
+               detail: `"click" was spoken, so the page wins over ${action.choice}` };
+    }
+    return {
+      kind: "clarify", why: "explicit_click_no_target",
+      say: ctx.readable
+        ? "I don't see that on this page."
+        : "I can't read this page, so there's nothing to click — try \"go to\" instead.",
+      detail: `"click" was spoken but no element matched (action was ${action.choice}@${action.confidence.toFixed(2)})`,
+    };
+  }
+
   if (action.choice === "stop" && action.confidence > 0.8) {
     return { kind: "execute", command: { do: "stop_listening" }, why: "ok" };
   }

@@ -22,12 +22,21 @@ const ELEMENTS = [
 ];
 const TYPEABLES = [{ id: "e40", text: "Ask Google", kind: "search input", where: "main content" }];
 
-// Deliberately NO tab matching "CMC email" — that was the real situation.
-const TABS = [{ id: "t1", title: "Recent Canvas Notifications", host: "mail.claremontmckenna.edu" }];
+// A tab ALREADY has CMC email open. "click on X" must still click the tile;
+// "go to X" may reasonably switch to the tab.
+const TABS = [
+  { id: "t1", title: "Recent Canvas Notifications", host: "mail.claremontmckenna.edu" },
+  { id: "t2", title: "CMC email — Inbox (9,102)", host: "mail.google.com" },
+];
 const PAGE = { title: "New Tab", url: "https://www.google.com", host: "www.google.com" };
 
 const CASES = [
-  { say: "go to CMC email",      target: "e10" },
+  // Reported: this switched to the open tab instead of clicking the tile.
+  { say: "click on CMC email",   target: "e10" },
+  { say: "click CMC drive",      target: "e18" },
+  { say: "press LinkedIn",       target: "e13" },
+  // "go to" stays free to prefer the already-open tab.
+  { say: "go to CMC email",      switchesOk: true },
   { say: "open CMC docs",        target: "e11" },
   { say: "go to Gcal",           target: "e12" },
   { say: "open LinkedIn",        target: "e13" },
@@ -41,7 +50,7 @@ const byId = new Map([...ELEMENTS, ...TYPEABLES].map((e) => [e.id, e]));
 const pad = (s, n) => String(s).padEnd(n).slice(0, n);
 let pass = 0; const failures = [];
 
-console.log(`\n${CASES.length} tiles on a new-tab page · no matching tab open\n`);
+console.log(`\n${CASES.length} utterances on a new-tab page of tiles · a tab already has CMC email open\n`);
 console.log(pad("utterance", 24), pad("action", 12), pad("conf", 6), pad("resolved", 34), "ok");
 console.log("-".repeat(88));
 
@@ -59,12 +68,13 @@ for (const c of CASES) {
   const d = resolveCommand(answers, { transcript: c.say, elements: ELEMENTS, typeables: TYPEABLES, tabs: TABS, readable: true });
 
   const clicked = d.command?.do === "click" ? d.command.id : null;
-  const ok = clicked === c.target;
-  ok ? pass++ : failures.push([c.say, `expected click ${c.target} ("${byId.get(c.target)?.text}"), got ${d.kind} ${JSON.stringify(d.command ?? "")} [${d.why}]`]);
+  const switched = d.command?.do === "switch_tab" ? d.command.id : null;
+  const ok = c.switchesOk ? Boolean(clicked || switched) : clicked === c.target;
+  ok ? pass++ : failures.push([c.say, `expected ${c.switchesOk ? "click or switch" : `click ${c.target} ("${byId.get(c.target)?.text}")`}, got ${d.kind} ${JSON.stringify(d.command ?? "")} [${d.why}]`]);
 
   console.log(
     pad(c.say, 24), pad(answers.action.choice, 12), pad(answers.action.confidence.toFixed(2), 6),
-    pad(clicked ? `click "${byId.get(clicked)?.text}"` : `${d.kind} [${d.why}]`, 34),
+    pad(clicked ? `click "${byId.get(clicked)?.text}"` : switched ? `switch ${switched}` : `${d.kind} [${d.why}]`, 34),
     ok ? "✓" : "✗",
   );
 }

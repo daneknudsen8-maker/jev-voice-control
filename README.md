@@ -75,6 +75,10 @@ candidate list, since position is about where things sit, not how well their tex
 **Tab position** — "next tab", "go left two tabs", "switch back" — is arithmetic, so code handles it
 entirely. No model call, and "switch back" uses a real last-used-tab history.
 
+**A spoken verb wins.** "Click on X" is an instruction about the page in front of you, so it clicks —
+it never switches to a tab that happens to have X open, however well that tab matches. "Go to X" stays
+free to prefer an already-open tab, and "open X" too, since those really can mean the tab.
+
 **Things on the page win.** "go to CMC email" on a page of bookmark tiles means the tile. Naming
 something visible resolves to clicking it, ahead of switching to a loosely-matching tab or guessing a
 URL — a shortcut you put there yourself is more specific than a generic domain. This also settles
