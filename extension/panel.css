@@ -95,10 +95,18 @@ body.dictating .mic[aria-pressed="true"] { background: var(--ok); }
   background: var(--bg); color: var(--fg); font: inherit; font-size: 12px; cursor: pointer;
 }
 .entry { display: flex; flex-direction: column; gap: 5px; }
+.entry-row { display: flex; gap: 8px; align-items: flex-end; }
 #command {
-  width: 100%; padding: 10px 12px; border: 2px solid var(--line); border-radius: 9px;
+  flex: 1; min-width: 0; padding: 10px 12px; border: 2px solid var(--line); border-radius: 9px;
   background: var(--bg); color: var(--fg); font: inherit; font-size: 15px;
+  resize: none; overflow-y: auto; max-height: 140px; line-height: 1.45;
 }
+.send {
+  flex: none; padding: 10px 16px; border: none; border-radius: 9px;
+  background: var(--accent); color: #fff; font: inherit; font-weight: 600; cursor: pointer;
+}
+.send:disabled { opacity: .4; cursor: default; }
+.send:not(:disabled):hover { filter: brightness(1.1); }
 #command:focus { outline: none; border-color: var(--accent); }
 body.text-engine #command:not(:focus) { border-color: var(--warn); }
 .entry-hint { margin: 0; font-size: 11px; color: var(--muted); }

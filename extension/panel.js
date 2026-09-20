@@ -11,6 +11,7 @@ const composer = $("composer"), composerText = $("composer-text"), composerTarge
 const mail = $("mail"), mailFields = $("mail-fields");
 const engineSelect = $("engine"), entry = $("entry"), commandInput = $("command");
 const taskBox = $("task"), taskGoal = $("task-goal"), taskSteps = $("task-steps"), taskStatus = $("task-status");
+const sendButton = $("send");
 
 let listening = false;
 let busy = false;
@@ -44,8 +45,8 @@ function applyEngine(next) {
   // The box stays; only the hint changes, since dictation auto-sends and
   // typing does not.
   $("entry-hint").textContent = ENGINES[next].needsInput
-    ? "Sends on Enter, or when dictation stops. Keep this box focused."
-    : "Press Enter to send. The mic runs separately.";
+    ? "Sends on Enter, or when dictation stops · keep this box focused"
+    : "Press Enter to send · Shift+Enter for a new line · the mic runs separately";
   document.body.classList.toggle("text-engine", next === "text");
   label.textContent = next === "text" ? "Start" : "Start listening";
 
@@ -58,16 +59,34 @@ engineSelect.addEventListener("change", (event) => applyEngine(event.target.valu
 // The command box works at all times, whichever source is selected and whether
 // or not the mic is running. Enter is handled here so it never depends on a
 // recognizer having been started.
-commandInput.addEventListener("keydown", (event) => {
-  if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
-  event.preventDefault();
+function sendTyped() {
   const text = commandInput.value.trim();
   if (!text) return;
   commandInput.value = "";
+  commandInput.style.height = "auto";
+  sendButton.disabled = true;
   heard.textContent = text;
   heard.classList.add("final");
   submit(text);
+}
+
+commandInput.addEventListener("keydown", (event) => {
+  // Shift+Enter is a new line; Enter sends. A goal can be long enough to want
+  // more than one line.
+  if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
+  event.preventDefault();
+  sendTyped();
 });
+
+// Grow with the text, up to the CSS cap.
+commandInput.addEventListener("input", () => {
+  sendButton.disabled = !commandInput.value.trim();
+  commandInput.style.height = "auto";
+  commandInput.style.height = `${Math.min(commandInput.scrollHeight, 140)}px`;
+});
+
+sendButton.addEventListener("click", sendTyped);
+sendButton.disabled = true;
 
 // Wispr Flow types into whatever field has focus. If focus leaves this box
 // while the text engine is on, the next thing dictated lands in the web page

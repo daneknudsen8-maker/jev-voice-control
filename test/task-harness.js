@@ -7,7 +7,7 @@
 // against a page, not a whole journey.
 
 import { buildCommandQuestions, resolveCommand } from "../extension/commands.js";
-import { buildTaskQuestions, dateCandidates, resolveDates, resolveTaskStep, valueCandidates } from "../extension/task.js";
+import { buildTaskQuestions, pageSignature, resolveTaskStep, valueCandidates } from "../extension/task.js";
 
 const KEY = process.env.TYPESAFE_API_KEY;
 if (!KEY) { console.error("TYPESAFE_API_KEY not set"); process.exit(1); }
@@ -127,8 +127,7 @@ const PAGES = [
 // Relative dates: code works out the days, Jev picks one off the calendar.
 
 const DATE_GOAL = "Book me an Airbnb for next week for 7 people in Palm Springs, California.";
-const TODAY = new Date("2026-09-20T12:00:00");   // a Sunday, so "next week" is the 21st
-const DATES = resolveDates(DATE_GOAL, TODAY);
+const TODAY_TEXT = "Sunday, September 20, 2026";   // a Sunday, so "next week" starts the 21st
 
 const CAL_DAYS = [];
 for (let d = 18; d <= 30; d++) {
@@ -141,23 +140,64 @@ const CAL_ELEMENTS = [
 ];
 const CAL_TYPEABLES = [{ id: "t0", text: "Palm Springs, California", kind: "search input", where: "main content" }];
 
-console.log(`\n\x1b[1mrelative dates — "${DATE_GOAL.slice(0, 44)}…"\x1b[0m\n`);
-check(DATES.length > 0 && DATES[0].start === "2026-09-21", "resolveDates: next week from Sun 20 Sep",
-      `got ${DATES[0]?.start} to ${DATES[0]?.end}`);
-console.log(`  resolved in code: ${DATES[0]?.label} = ${DATES[0]?.start} → ${DATES[0]?.end}`);
-
+// The model gets `today` and works the date out itself — measured better than
+// pre-computing it, and without the bug pre-computing introduced.
+console.log(`\n\x1b[1mrelative dates, unaided — "${DATE_GOAL.slice(0, 40)}…"\x1b[0m\n`);
 {
-  const values = valueCandidates(DATE_GOAL, [...CAL_TYPEABLES.map((t) => t.text), ...dateCandidates(DATES)]);
+  const values = valueCandidates(DATE_GOAL, CAL_TYPEABLES.map((t) => t.text));
   const answers = await ask(
-    { goal: DATE_GOAL, step_number: 3, page: { title: "Airbnb — choose dates" },
-      elements: CAL_ELEMENTS, typeables: CAL_TYPEABLES, dates: DATES,
+    { goal: DATE_GOAL, step_number: 3, today: TODAY_TEXT, page: { title: "Airbnb — choose dates" },
+      elements: CAL_ELEMENTS, typeables: CAL_TYPEABLES,
       history: ['type "Palm Springs, California" into Where', 'click "Check in"'] },
-    buildTaskQuestions({ elements: CAL_ELEMENTS, typeables: CAL_TYPEABLES, values, dates: DATES }),
+    buildTaskQuestions({ elements: CAL_ELEMENTS, typeables: CAL_TYPEABLES, values }),
   );
   const step = resolveTaskStep(answers, { values, history: [], elements: CAL_ELEMENTS, typeables: CAL_TYPEABLES, goal: DATE_GOAL });
-  const mark = check(step.command?.id === "d21", "picks the 21st off the calendar",
+  const mark = check(step.command?.id === "d21", "picks the 21st off the calendar, given only today",
                      `got ${step.command?.id ?? step.do} (${step.label ?? step.detail})`);
+  console.log(`  today: ${TODAY_TEXT}`);
   console.log(`  picked: ${step.label ?? step.detail}  (target ${answers.target?.confidence?.toFixed(2)}) ${mark}`);
+}
+
+// ------------------------------------------------------------- part four
+// A guest counter: the same button pressed until the number is right, then on.
+// I predicted this would defeat a greedy loop. Measured, it does not.
+
+function guestPanel(adults) {
+  return [
+    { id: "g0", text: "Adults — Ages 13 or above", kind: "label", where: "main content" },
+    { id: "g1", text: "decrease adults", kind: "button", where: "main content" },
+    { id: "g2", text: String(adults), kind: "text", where: "main content" },
+    { id: "g3", text: "increase adults", kind: "button", where: "main content" },
+    { id: "g9", text: "Search", kind: "button", where: "main content" },
+  ];
+}
+
+console.log(`\n\x1b[1mguest counter — press "+" until 7, then move on\x1b[0m\n`);
+console.log(pad("adults on screen", 18), pad("next", 8), pad("target", 10), pad("resolved", 30), "ok");
+console.log("-".repeat(76));
+
+{
+  const stepHistory = [];
+  for (const [adults, want] of [[1, "g3"], [4, "g3"], [6, "g3"], [7, "g9"]]) {
+    const els = guestPanel(adults);
+    const values = valueCandidates(DATE_GOAL, []);
+    const signature = pageSignature(els, []);
+    const answers = await ask(
+      { goal: DATE_GOAL, step_number: stepHistory.length + 1, today: TODAY_TEXT,
+        page: { title: "Airbnb — who is coming" }, elements: els, typeables: [],
+        history: stepHistory.map((h) => h.label) },
+      buildTaskQuestions({ elements: els, typeables: [], values }),
+    );
+    const step = resolveTaskStep(answers, {
+      values, history: stepHistory, elements: els, typeables: [], goal: DATE_GOAL, signature,
+    });
+    const mark = check(step.command?.id === want, `guest counter at ${adults}`,
+                       `expected ${want}, got ${step.command?.id ?? step.do} (${step.detail ?? ""})`);
+    console.log(pad(String(adults), 18), pad(answers.next_action.choice, 8),
+                pad(`${answers.target.choice} ${answers.target.confidence.toFixed(2)}`, 10),
+                pad(step.label ?? `${step.do}: ${step.why}`, 30), mark);
+    stepHistory.push({ label: step.label, command: step.command, signature });
+  }
 }
 
 console.log(`\n\x1b[1mnext step, given "${GOAL}"\x1b[0m\n`);

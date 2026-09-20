@@ -4,7 +4,7 @@
 import { buildCommandQuestions, matchLocalCommand, matchTabNavigation, resolveCommand, splitSteps } from "./commands.js";
 import { appendChunk, buildDictationQuestions, resolveDictation } from "./dictation.js";
 import { buildComposeQuestions, REPLACES, resolveCompose, spokenEmail } from "./compose.js";
-import { buildTaskQuestions, dateCandidates, MAX_STEPS, resolveDates, resolveTaskStep, valueCandidates } from "./task.js";
+import { buildTaskQuestions, MAX_STEPS, pageSignature, resolveTaskStep, valueCandidates } from "./task.js";
 import "./open-panel.js";
 
 const PROXY = "http://127.0.0.1:8787/systemone";
@@ -509,7 +509,7 @@ async function runSequence(steps, original) {
  * the only thing Jev can usefully answer. Nothing is planned ahead.
  */
 async function runTask(goal, existing = null) {
-  const task = existing ?? { goal, steps: [], startedAt: Date.now(), dates: resolveDates(goal) };
+  const task = existing ?? { goal, steps: [], startedAt: Date.now() };
   const done = (kind, message, extra = {}) => {
     const result = { kind, message, task: { ...task, running: false }, ...extra };
     return result;
@@ -531,12 +531,10 @@ async function runTask(goal, existing = null) {
       return done("task_stopped", `Lost the page: ${error.message}`, { why: "page_unavailable" });
     }
 
-    // Values are enumerated by code; Jev only selects among them. Relative
-    // dates are worked out here too, since date arithmetic is not something
-    // Jev does reliably — it gets real days to pick from instead.
+    // Values are enumerated by code only because Jev cannot generate text; it
+    // still chooses among them. Dates are left to it, given `today`.
     const pageValues = inv.typeables.map((t) => t.text).filter(Boolean);
-    const dates = task.dates ?? resolveDates(goal);
-    const values = valueCandidates(goal, [...pageValues, ...dateCandidates(dates)]);
+    const values = valueCandidates(goal, pageValues);
 
     const state = {
       goal,
@@ -549,15 +547,16 @@ async function runTask(goal, existing = null) {
       today: new Date().toLocaleDateString("en-US", {
         weekday: "long", year: "numeric", month: "long", day: "numeric",
       }),
-      ...(dates.length ? { dates } : {}),
+
     };
 
     const answers = await askJev(state, buildTaskQuestions({
-      elements: inv.elements, typeables: inv.typeables, values, dates,
+      elements: inv.elements, typeables: inv.typeables, values,
     }));
 
+    const signature = pageSignature(inv.elements, inv.typeables);
     const step = resolveTaskStep(answers, {
-      values, history: task.steps, elements: inv.elements, typeables: inv.typeables, goal,
+      values, history: task.steps, elements: inv.elements, typeables: inv.typeables, goal, signature,
     });
 
     if (step.do === "done") {
@@ -585,7 +584,7 @@ This can't easily be undone (risk ${step.risk.toFixed(1)}).`,
     // Ordinary step: do it.
     const before = tab.url;
     const result = await runStepCommand(step.command, tab.id);
-    task.steps.push({ label: step.label, command: step.command, ok: result.ok, at: Date.now() });
+    task.steps.push({ label: step.label, command: step.command, ok: result.ok, at: Date.now(), signature });
     await setTask({ ...task, running: true });
 
     if (!result.ok) {

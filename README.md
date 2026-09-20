@@ -117,15 +117,18 @@ That makes the loop **greedy**. It follows an obvious path well. It cannot plan 
 and it cannot improvise when a site does something unexpected. Starting on an unrelated page it will
 search the web for the goal first, then carry on from the results.
 
-**Dates: Jev does most of this itself.** Measured on a September 2026 calendar, given only today's
-date, it picks the right day for "tomorrow" (1.00), "in three days" (0.97), "next friday" (0.97) and
-"the 25th" (1.00) — including real arithmetic — and correctly answers "none of these" for a date the
-calendar does not show. It does need `today`, which it cannot know, so that is always supplied.
+**Dates are left to the model.** Given only today's date it picks the right calendar day for
+"tomorrow" (1.00), "in three days" (0.97 — real arithmetic), "next friday" (0.97) and "the 25th"
+(1.00), and correctly says "none of these" for a date the calendar does not show. `today` is supplied
+because it has no clock; nothing else is.
 
-Code also works out the common phrases and passes them as a **hint**, not an instruction: 6/8 correct
-at 0.80 mean confidence unaided, 7/8 at 0.88 with the hint. The hint is explicitly overridable,
-because an earlier version that told Jev to defer to it turned a case it had right at 0.97 into a
-wrong answer when the code itself was buggy. Where the two disagree, the goal and `today` win.
+A previous version pre-computed dates in code. Measured, that bought one case in eight and *cost* a
+case it had right at 0.97, because a bug in the computation was believed over the plain wording. It
+was deleted.
+
+**Repeated clicks are allowed when the page reacts.** Pressing "+" on a guest counter six times is the
+same click six times, so a repeat only counts as stuck when the page did not change. The loop presses
+"+" from 1 to 7 and then moves to Search on its own (0.97–0.99 throughout).
 
 **Values are selected, never invented.** For a typing step, code enumerates every phrase in your goal
 and every value already on the page, and Jev picks which one belongs in the field. So "fill this in
@@ -135,8 +138,9 @@ from that email" works, while "write a paragraph about X" does not — there is 
 anything at 1.5 or above waits for you — booking, paying, submitting, sending. You approve, and the
 loop carries on from there.
 
-The command box in the panel takes typed input at any time, whichever transcript source is selected —
-press Enter to send. Useful for a long goal you would rather not dictate.
+The command box takes typed input at any time, whichever transcript source is selected: Enter to send,
+Shift+Enter for a new line, or the Send button. It grows with the text, so a long goal is easier to
+type than to dictate.
 
 | It stops when | |
 |---|---|
