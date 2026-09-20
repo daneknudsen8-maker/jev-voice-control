@@ -6,20 +6,26 @@
 // resolver produced the expected command.
 
 import { buildCommandQuestions, matchLocalCommand, resolveCommand } from "../extension/commands.js";
-import { ELEMENTS, TYPEABLES, TABS, PAGE, CASES } from "./fixtures.js";
+import { ELEMENTS, TYPEABLES, TABS, PAGE, CASES, BLANK_TAB_CASES } from "./fixtures.js";
 
 const API_KEY = process.env.TYPESAFE_API_KEY;
 const API_URL = `${process.env.TYPESAFE_BASE_URL ?? "https://api.typesafe.ai"}/v1/systemone`;
 if (!API_KEY) { console.error("TYPESAFE_API_KEY not set — run with node --env-file=../.env harness.js"); process.exit(1); }
 
-const only = process.argv[2];
-const cases = only ? CASES.filter((c) => c.say.includes(only)) : CASES;
+const blank = process.argv.includes("--blank");
+const only = process.argv.slice(2).find((a) => !a.startsWith("--"));
+const source = blank ? BLANK_TAB_CASES : CASES;
+const cases = only ? source.filter((c) => c.say.includes(only)) : source;
 
-const questions = buildCommandQuestions({ elements: ELEMENTS, tabs: TABS, typeables: TYPEABLES });
+const elements  = blank ? [] : ELEMENTS;
+const typeables = blank ? [] : TYPEABLES;
+const page      = blank ? { title: "New tab", url: "", host: "" } : PAGE;
+
+const questions = buildCommandQuestions({ elements, tabs: TABS, typeables });
 
 async function ask(utterance) {
   const body = {
-    state: { utterance, page: PAGE, elements: ELEMENTS, typeables: TYPEABLES, open_tabs: TABS },
+    state: { utterance, page, elements, typeables, open_tabs: TABS },
     model: "jev-latest",
     questions,
   };
@@ -38,7 +44,7 @@ const pad = (s, n) => String(s).padEnd(n).slice(0, n);
 let pass = 0, fail = 0, tokens = 0, totalMs = 0;
 const failures = [];
 
-console.log(`\n${cases.length} utterances · ${Object.keys(questions).length} questions per request · jev-latest\n`);
+console.log(`\n${cases.length} utterances · ${Object.keys(questions).length} questions per request · jev-latest${blank ? " · BLANK TAB (no page)" : ""}\n`);
 console.log(pad("utterance", 42), pad("action", 12), pad("conf", 6), pad("cmd", 6), pad("risk", 6), pad("resolved", 26), "ok");
 console.log("-".repeat(112));
 
@@ -64,7 +70,7 @@ for (const testCase of cases) {
   totalMs += ms;
 
   const decision = resolveCommand(answers, {
-    transcript: testCase.say, elements: ELEMENTS, typeables: TYPEABLES, tabs: TABS,
+    transcript: testCase.say, elements, typeables, tabs: TABS, readable: !blank,
   });
 
   // What did the resolver actually produce?
@@ -88,6 +94,8 @@ for (const testCase of cases) {
   // Did we get the intent right, and the target when one was specified?
   let ok = actual === testCase.expect;
   if (ok && testCase.target) ok = (cmd?.id === testCase.target);
+  if (ok && testCase.url) ok = (cmd?.url === testCase.url);
+  if (ok && testCase.search) ok = Boolean(cmd?.url?.includes("google.com/search"));
   if (testCase.risky && decision.kind !== "confirm") ok = false;
   const confirmMark = decision.kind === "confirm" ? "🔒" : "";
 

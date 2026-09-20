@@ -5,6 +5,7 @@ import { buildCommandQuestions, matchLocalCommand, resolveCommand } from "./comm
 import "./open-panel.js";
 
 const PROXY = "http://127.0.0.1:8787/systemone";
+const TRACE = "http://127.0.0.1:8787/trace";
 const MODEL = "jev-latest";
 
 let lastUsage = null;
@@ -66,14 +67,28 @@ async function handleUtterance(transcript) {
 
   const tab = await activeTab();
 
-  if (!tab.url || /^(chrome|edge|about|chrome-extension|devtools):/.test(tab.url)) {
-    return { kind: "error", message: "I can't read this page (browser internal page). Switch to a normal site." };
-  }
+  // A new tab, the settings page, a PDF — nothing to inventory. That is NOT a
+  // reason to refuse the command: "go to hacker news", "new tab" and "switch to
+  // gmail" all work fine with no page at all, and a new tab is exactly where you
+  // are most likely to say one of them.
+  const readable = Boolean(tab.url) && !/^(chrome|edge|about|chrome-extension|devtools|view-source|file):/.test(tab.url);
 
-  const [inv, tabs] = await Promise.all([
-    talkToPage(tab.id, { type: "inventory", utterance: transcript }),
-    openTabs(tab.id),
-  ]);
+  let inv = {
+    page: { title: tab.title ?? "New tab", url: tab.url ?? "", host: "" },
+    elements: [],
+    typeables: [],
+  };
+  const tabs = await openTabs(tab.id);
+
+  if (readable) {
+    try {
+      inv = await talkToPage(tab.id, { type: "inventory", utterance: transcript });
+    } catch (error) {
+      // Content script unavailable (page still loading, or CSP blocked it).
+      // Page-independent commands should still work.
+      console.warn("inventory failed, continuing without page:", error.message);
+    }
+  }
 
   const state = {
     utterance: transcript,
@@ -91,9 +106,22 @@ async function handleUtterance(transcript) {
     elements: inv.elements,
     typeables: inv.typeables,
     tabs,
+    readable,
   });
 
-  return { ...(await carryOut(decision, tab, transcript)), answers, usage: lastUsage, decision };
+  return {
+    ...(await carryOut(decision, tab, transcript)),
+    answers,
+    usage: lastUsage,
+    decision,
+    page: inv.page,
+    // What Jev actually had to choose from — the first thing to check on a miss.
+    candidates: {
+      elements: inv.elements.map((e) => ({ id: e.id, text: e.text, kind: e.kind, where: e.where })),
+      typeables: inv.typeables.map((e) => ({ id: e.id, text: e.text, kind: e.kind })),
+      tabs,
+    },
+  };
 }
 
 async function carryOut(decision, tab, transcript) {
@@ -108,7 +136,7 @@ async function carryOut(decision, tab, transcript) {
       return { kind: "choose", message: decision.say, options: decision.options, debug: decision.debug };
 
     case "confirm":
-      pending = { command: decision.command, tabId: tab.id };
+      pending = { command: decision.command, tabId: tab.id, utterance: transcript };
       return { kind: "confirm", message: decision.say, risk: decision.risk };
 
     case "ask_page":
@@ -123,6 +151,17 @@ async function carryOut(decision, tab, transcript) {
 }
 
 let pending = null;
+
+/** Report the full outcome of an utterance. Never allowed to break a command. */
+async function record(entry) {
+  try {
+    await fetch(TRACE, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ at: new Date().toISOString(), ...entry }),
+    });
+  } catch { /* proxy down: the command itself still worked */ }
+}
 
 async function run(command, tabId) {
   switch (command.do) {
@@ -161,7 +200,12 @@ async function run(command, tabId) {
 // ask_page: a second request, justified because its state is page prose rather
 // than page controls, and it only exists on this branch.
 async function answerAboutPage(tab, question) {
-  const { sections, page } = await talkToPage(tab.id, { type: "sections" });
+  let sections, page;
+  try {
+    ({ sections, page } = await talkToPage(tab.id, { type: "sections" }));
+  } catch {
+    return { kind: "error", message: "I can't read this page — open a website first." };
+  }
   if (!sections.length) return { kind: "error", message: "nothing readable on this page" };
 
   const answers = await askJev(
@@ -212,12 +256,50 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
   (async () => {
     try {
       if (msg.type === "utterance") {
-        respond(await handleUtterance(msg.transcript));
+        const started = Date.now();
+        let result;
+        try {
+          result = await handleUtterance(msg.transcript);
+        } catch (error) {
+          await record({
+            utterance: msg.transcript,
+            executed: false,
+            outcome: "error",
+            why: "exception",
+            detail: error.message,
+            ms: Date.now() - started,
+          });
+          throw error;
+        }
+        await record({
+          utterance: msg.transcript,
+          executed: result.kind === "done" || result.kind === "answer" || result.kind === "stop",
+          outcome: result.kind,
+          why: result.decision?.why ?? (result.local ? "local_command" : result.why ?? null),
+          detail: result.decision?.detail ?? result.message ?? null,
+          command: result.decision?.command ?? null,
+          message: result.message ?? null,
+          page: result.page ?? null,
+          candidates: result.candidates ?? null,
+          answers: result.answers ?? null,
+          usage: result.usage ?? null,
+          ms: Date.now() - started,
+        });
+        respond(result);
       } else if (msg.type === "confirm") {
         if (!pending) return respond({ kind: "error", message: "nothing to confirm" });
-        const { command, tabId } = pending;
+        const { command, tabId, utterance } = pending;
         pending = null;
-        respond(msg.yes ? await run(command, tabId) : { kind: "ignored", message: "cancelled" });
+        const outcome = msg.yes ? await run(command, tabId) : { kind: "ignored", message: "cancelled by user" };
+        await record({
+          utterance: `${utterance ?? "(confirm)"} → ${msg.yes ? "CONFIRMED" : "CANCELLED"}`,
+          executed: msg.yes && outcome.kind === "done",
+          outcome: outcome.kind,
+          why: msg.yes ? "user_confirmed" : "user_cancelled",
+          detail: outcome.message ?? null,
+          command,
+        });
+        respond(outcome);
       } else if (msg.type === "pick") {
         const tab = await activeTab();
         respond(await run({ do: "click", id: msg.id }, tab.id));

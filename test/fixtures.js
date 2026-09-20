@@ -49,7 +49,7 @@ export const CASES = [
   { say: "upvote that",                              expect: "click",      target: "e10" },
   { say: "show me the guidelines",                   expect: "click",      target: "e17" },
   { say: "delete my account",                        expect: "click",      target: "e16", risky: true },
-  { say: "search for rust async",                    expect: "type",       target: "e20" },
+  { say: "search this site for rust async",          expect: "type",       target: "e20" },
   { say: "type nice write-up in the comment box",    expect: "type",       target: "e21" },
   { say: "go to gmail",                              expect: "switch_tab", target: "t101" },  // already open: switching beats reloading
   { say: "take me to the typesafe docs",             expect: "switch_tab", target: "t102" },
@@ -60,4 +60,28 @@ export const CASES = [
   { say: "stop listening",                           expect: "stop" },
   { say: "uh so anyway what were you saying",        expect: "none" },
   { say: "yeah I think we should probably order lunch", expect: "none" },
+
+  // Sites outside KNOWN_SITES must actually navigate, not silently search.
+  { say: "go to espn",                               expect: "navigate", url: "https://espn.com" },
+  { say: "open notion",                              expect: "navigate", url: "https://notion.com" },
+  { say: "go to github.com",                         expect: "navigate", url: "https://github.com" },
+  { say: "take me to arstechnica dot com",           expect: "navigate", url: "https://arstechnica.com" },
+  // Descriptions must still search rather than guess a domain.
+  { say: "find flights to denver",                   expect: "navigate", search: true },
+  { say: "google the best mechanical keyboards",     expect: "navigate", search: true },
+  // Bare "search for X" = the web. Naming the site = the page's own box.
+  { say: "search for the best mechanical keyboards", expect: "navigate", search: true },
+  { say: "search this site for rust",                expect: "type", target: "e20" },
+];
+
+// Same utterances on a blank new tab: no elements, no fields, nothing to read.
+// Page-independent commands must still work — this is the regression that made
+// every command after "open a new tab" fail.
+export const BLANK_TAB_CASES = [
+  { say: "go to hacker news",   expect: "navigate" },
+  { say: "go to espn",          expect: "navigate" },
+  { say: "open a new tab",      expect: "new_tab" },
+  { say: "switch to the gmail tab", expect: "switch_tab" },
+  { say: "go back",             expect: "back" },
+  { say: "click the login link", expect: "clarify" },  // correctly refused: no page
 ];

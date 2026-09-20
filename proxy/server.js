@@ -6,11 +6,13 @@
 //   node --env-file=../.env server.js
 
 import { createServer } from "node:http";
+import { appendFile } from "node:fs/promises";
 
 const PORT = Number(process.env.JEV_PROXY_PORT ?? 8787);
 const API_URL = `${process.env.TYPESAFE_BASE_URL ?? "https://api.typesafe.ai"}/v1/systemone`;
 const API_KEY = process.env.TYPESAFE_API_KEY;
 const MAX_BODY = 2 * 1024 * 1024;
+const TRACE = process.env.JEV_TRACE_FILE ?? "/tmp/jev-trace.jsonl";
 
 if (!API_KEY) {
   console.error("TYPESAFE_API_KEY is not set. Run with: node --env-file=../.env server.js");
@@ -41,13 +43,65 @@ function send(res, status, payload, origin) {
   res.end(body);
 }
 
+// Log what was actually asked and what came back. Without the utterance and the
+// answers side by side, a wrong action is undiagnosable after the fact.
+async function trace(body, parsed, ms) {
+  const state = body?.state ?? {};
+  const answers = parsed?.answers ?? {};
+  const utterance = state.utterance ?? state.question ?? "(none)";
+
+  const summary = Object.entries(answers).map(([id, a]) => {
+    if (a.type === "noul") return `${id}=${a.noul.toFixed(2)}`;
+    if (a.type === "choice") return `${id}=${a.choice}@${a.confidence.toFixed(2)}`;
+    if (a.type === "score") return `${id}=${a.score.toFixed(2)}@${a.confidence.toFixed(2)}`;
+    return id;
+  }).join("  ");
+
+  const counts = `${(state.elements ?? []).length}el/${(state.typeables ?? []).length}fld/${(state.sections ?? []).length}sec`;
+  console.log(`\n▸ "${utterance}"`);
+  console.log(`  ${ms}ms · ${parsed?.usage?.input_tokens ?? "?"} tok · ${counts}`);
+  console.log(`  ${summary}`);
+
+  // Full detail, one JSON object per line, for later analysis.
+  try {
+    await appendFile(TRACE, JSON.stringify({
+      kind: "call",
+      at: new Date().toISOString(),
+      ms,
+      utterance,
+      page: state.page ?? null,
+      tokens: parsed?.usage?.input_tokens ?? null,
+      elements: state.elements ?? [],
+      typeables: state.typeables ?? [],
+      open_tabs: state.open_tabs ?? [],
+      sections: (state.sections ?? []).map((s) => ({ id: s.id, text: s.text?.slice(0, 80) })),
+      answers,
+    }) + "\n");
+  } catch { /* tracing must never break a request */ }
+}
+
+const MARK = { true: "\u001b[32m✓\u001b[0m", false: "\u001b[33m·\u001b[0m" };
+
+/** The authoritative per-command record: did it run, and if not, which gate stopped it. */
+async function recordOutcome(entry) {
+  const ran = entry.executed === true;
+  const mark = ran ? MARK.true : (entry.outcome === "error" ? "\u001b[31m✗\u001b[0m" : MARK.false);
+  const why = entry.why ? ` [${entry.why}]` : "";
+  console.log(`${mark} "${entry.utterance}" → ${entry.outcome}${why}`);
+  if (!ran && entry.detail) console.log(`     ${entry.detail}`);
+
+  try {
+    await appendFile(TRACE, JSON.stringify({ kind: "outcome", ...entry }) + "\n");
+  } catch { /* never break on tracing */ }
+}
+
 const server = createServer(async (req, res) => {
   const origin = req.headers.origin;
 
   if (req.method === "OPTIONS") {
     return send(res, originAllowed(origin) ? 204 : 403, {}, origin);
   }
-  if (req.method !== "POST" || req.url !== "/systemone") {
+  if (req.method !== "POST" || (req.url !== "/systemone" && req.url !== "/trace")) {
     return send(res, 404, { error: "not found" }, origin);
   }
   if (!originAllowed(origin)) {
@@ -75,6 +129,12 @@ const server = createServer(async (req, res) => {
       return send(res, 400, { error: "invalid JSON" }, origin);
     }
 
+    // Outcome records from the extension: what happened AFTER the model answered.
+    if (req.url === "/trace") {
+      await recordOutcome(body);
+      return send(res, 204, {}, origin);
+    }
+
     const started = Date.now();
     try {
       const upstream = await fetch(API_URL, {
@@ -98,10 +158,7 @@ const server = createServer(async (req, res) => {
         return send(res, upstream.status, parsed ?? { error: text.slice(0, 500) }, origin);
       }
 
-      const q = Object.keys(body?.questions ?? {}).length;
-      const used = parsed?.usage?.input_tokens ?? "?";
-      console.log(`ok ${ms}ms  ${q} questions  ${used} input tokens`);
-
+      await trace(body, parsed, ms);
       return send(res, 200, parsed ?? {}, origin);
     } catch (error) {
       console.error(`proxy error: ${error.message}`);
@@ -114,4 +171,5 @@ const server = createServer(async (req, res) => {
 server.listen(PORT, "127.0.0.1", () => {
   console.log(`jev proxy on http://127.0.0.1:${PORT}  ->  ${API_URL}`);
   console.log(ALLOWED_ID ? `pinned to extension ${ALLOWED_ID}` : "accepting any chrome-extension:// origin (dev)");
+  console.log(`tracing every call to ${TRACE}`);
 });

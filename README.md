@@ -41,14 +41,24 @@ microphone.** Click *Start listening* (or press Space). Grant mic permission whe
 | Clicking | "click the login button", "open the comments on the Rust story", "show me the guidelines" |
 | Typing | "search for rust async", "type nice write-up in the comment box" |
 | Tabs | "new tab", "switch to the gmail tab", "close the youtube tab" |
-| Going places | "go to hacker news", "take me to wikipedia" |
+| Going places | "go to hacker news", "go to espn", "open github.com", "take me to arstechnica dot com" |
+| Searching | "google mechanical keyboards" or "search for X" (the web) · "search this site for X" (the page's own box) |
 | Asking | "is there anything about kubernetes here", "find the pricing section" |
 | Stopping | "stop listening", "go to sleep" |
 
-Sites reachable by name live in `KNOWN_SITES` in [extension/commands.js](extension/commands.js) — edit
-freely. Anything not in the list becomes a web search built from what you actually said.
+Navigation resolves in four steps, and only step 3 involves the model:
+
+1. **An address you spoke** — "github.com", "arstechnica dot com" — used directly, no model needed.
+2. **A site in `KNOWN_SITES`** ([extension/commands.js](extension/commands.js)) — edit that list freely.
+3. **A single-word site name** — "go to espn" → `espn.com`, but only when a Noul judges that you are
+   naming a site rather than describing something to find. Multi-word names are not guessed at, since
+   "the new york times" is not `thenewyorktimes.com`.
+4. **Anything else** — a web search built from exactly what you said.
 
 If a named site is already open in a tab, it switches to that tab instead of reloading it.
+
+Commands that don't need page content — navigating, tabs, history — work on a blank new tab, where
+there is nothing to read.
 
 ## Safety
 
@@ -64,6 +74,20 @@ conversation scores 0.03–0.04 while real commands score 0.90+.
 Thresholds are all at the top of [extension/commands.js](extension/commands.js) (`FLOORS`,
 `CONFIRM_RISK`, `DANGER`). **Tune them on your own speech** — the current values are a starting point.
 
+## Seeing why a command did or didn't run
+
+Every utterance is recorded with the gate that decided it:
+
+```sh
+node test/report.js                       # every command, ran or not, and why
+node test/report.js --failed              # only what didn't run
+node test/report.js --why target_no_match # drill in, with the full candidate list
+```
+
+On a missed click the decisive question is whether the right element was even among the candidates.
+Absent → the ranking in [content.js](extension/content.js) is at fault. Present but not chosen → the
+question wording is. The drill-down prints the candidate list so you can tell which.
+
 ## Testing without a browser
 
 `test/harness.js` runs the real question design against the real model over a fixture page, so you can
@@ -71,9 +95,10 @@ iterate on prompt wording without loading the extension or speaking a word:
 
 ```sh
 cd test && node --env-file=../.env harness.js
-# 22/22 passed · 70997 input tokens · 220ms avg · $0.003 per run
+# 30/30 passed · 214ms avg · $0.004 per run
 
-node --env-file=../.env harness.js "delete"   # just matching utterances
+node --env-file=../.env harness.js --blank    # same, on an empty tab with no page
+node --env-file=../.env harness.js delete     # just matching utterances
 ```
 
 Add cases to `test/fixtures.js`. Each case is one API call; a full run costs about a third of a cent.
