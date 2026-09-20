@@ -39,7 +39,8 @@ microphone.** Click *Start listening* (or press Space). Grant mic permission whe
 |---|---|
 | Moving | "scroll down", "back to the top", "go back", "reload" |
 | Clicking | "click the login button", "open the comments on the Rust story", "show me the guidelines" |
-| Typing | "search for rust async", "type nice write-up in the comment box" |
+| Typing | "type nice write-up in the comment box", "search this site for rust" |
+| Writing | "write an email", "let me dictate a comment" → then just talk |
 | Tabs | "new tab", "switch to the gmail tab", "close this tab", "close the youtube tab" |
 | Going places | "go to hacker news", "go to espn", "open github.com", "take me to arstechnica dot com" |
 | Searching | "google mechanical keyboards" or "search for X" (the web) · "search this site for X" (the page's own box) |
@@ -59,6 +60,47 @@ If a named site is already open in a tab, it switches to that tab instead of rel
 
 Commands that don't need page content — navigating, tabs, history — work on a blank new tab, where
 there is nothing to read.
+
+## Writing longer text
+
+Say **"write an email"**, **"compose a message"**, or **"start dictating in the comment box"** and the
+panel switches to writing mode: everything you say is appended to that field until you say otherwise.
+
+| While writing | |
+|---|---|
+| Any sentence | appended to the message |
+| "new paragraph" / "new line" | line break |
+| "scratch that" | removes the last thing written |
+| "erase everything" | clears the field (confirms first) |
+| "send it" | submits the form (confirms first, showing the full text) |
+| "stop dictating" | leaves the text as written |
+
+Say punctuation out loud — "period", "comma", "question mark", "dash" — and it's converted in code.
+Capitals and spacing are handled for you.
+
+### How it avoids sending your half-written email
+
+This is the hard part of any voice interface. While writing, "send me the report tomorrow" is content
+and "send it" is a command, and they share words. Three defences, in order of trust:
+
+1. **Exact phrases in code.** "stop dictating", "scratch that" — deterministic, no model, no ambiguity.
+2. **A length rule in code.** Real controls are short imperatives. Seven words or more is presumptively
+   part of your message and needs overwhelming evidence to be read as an instruction.
+3. **Jev judges the rest** — with the question framed around *who is being addressed*. Content talks to
+   your recipient and may freely mention sending or deleting things in the world; an instruction talks
+   to the assistant about the words just spoken.
+
+**The default is always to write it down.** A control mistaken for content costs you a line to delete;
+content mistaken for a control sends a half-finished email. Those are not equal, so the safe direction
+is baked in. Sending and erasing confirm first regardless.
+
+`test/dictation-harness.js` measures exactly this, and reports *dangerous* misses (content treated as a
+command) separately from harmless ones:
+
+```sh
+cd test && node --env-file=../.env dictation-harness.js
+# 25/25 passed · 0 dangerous misses
+```
 
 ## Safety
 
@@ -97,7 +139,7 @@ iterate on prompt wording without loading the extension or speaking a word:
 
 ```sh
 cd test && node --env-file=../.env harness.js
-# 30/30 passed · 214ms avg · $0.004 per run
+# 35/35 passed · 193ms avg · $0.005 per run
 
 node --env-file=../.env harness.js --blank    # same, on an empty tab with no page
 node --env-file=../.env harness.js delete     # just matching utterances
@@ -142,9 +184,11 @@ extension/
   commands.js          ← the Jev question design. Start here.
   content.js           page element inventory + command execution
   panel.html/.js/.css  mic + transcript + activity log
+  dictation.js         writing mode: content vs command, punctuation, appending
   speech/index.js      swappable STT; webspeech.js is the default
 test/
   harness.js           browser-free evaluation against live Jev
+  dictation-harness.js mode-confusion tests; fails loudly on dangerous misses
   fixtures.js          fake page, tabs, and the expected outcomes
 docs/typesafe/         full local TypeSafe docs — read 00-core.md first
 ```

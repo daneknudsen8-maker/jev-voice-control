@@ -2,6 +2,7 @@
 // The panel sends transcripts here; this decides what happens.
 
 import { buildCommandQuestions, matchLocalCommand, resolveCommand } from "./commands.js";
+import { appendChunk, buildDictationQuestions, resolveDictation } from "./dictation.js";
 import "./open-panel.js";
 
 const PROXY = "http://127.0.0.1:8787/systemone";
@@ -89,6 +90,10 @@ async function handleUtterance(transcript) {
   const local = matchLocalCommand(transcript);
   if (local) return { kind: "stop", message: "listening paused", local: true };
 
+  // While a message is open, almost everything said is words for that message.
+  const mode = await getMode();
+  if (mode) return await handleDictation(transcript, mode);
+
   const tab = await activeTab();
 
   // A new tab, the settings page, a PDF — nothing to inventory. That is NOT a
@@ -153,6 +158,86 @@ async function handleUtterance(transcript) {
   };
 }
 
+/**
+ * One utterance while a message is open. The default is to write it down; see
+ * dictation.js for why that default is deliberately hard to escape.
+ */
+async function handleDictation(transcript, mode) {
+  const tab = await activeTab();
+  if (tab.id !== mode.tabId) {
+    await setMode(null);
+    return { kind: "error", message: "you switched tabs, so I stopped writing", why: "dictation_tab_changed" };
+  }
+
+  // An exact control phrase skips the model entirely.
+  const quick = resolveDictation(null, transcript);
+  let answers = null;
+  let decision = quick;
+
+  if (quick.why !== "control_phrase") {
+    answers = await askJev(
+      {
+        utterance: transcript,
+        writing_into: mode.label ?? "a text box",
+        text_so_far: (mode.text ?? "").slice(-300),
+      },
+      buildDictationQuestions(),
+    );
+    decision = resolveDictation(answers, transcript);
+  }
+
+  const report = (extra) => ({
+    ...extra, answers, usage: lastUsage, decision,
+    dictation: { active: true, label: mode.label, text: mode.text },
+  });
+
+  switch (decision.do) {
+    case "append": {
+      const text = appendChunk(mode.text ?? "", decision.text);
+      const result = await talkToPage(tab.id, {
+        type: "execute",
+        command: { do: "set_dictation_text", text, note: "wrote that" },
+      }).catch((error) => ({ ok: false, error: error.message }));
+
+      if (!result.ok) {
+        await setMode(null);
+        return report({ kind: "error", message: result.error, why: "dictation_field_lost" });
+      }
+      await setMode({ ...mode, text });
+      return report({ kind: "wrote", message: text, why: decision.why, detail: decision.detail });
+    }
+
+    case "new_paragraph": {
+      const text = `${(mode.text ?? "").replace(/\s+$/, "")}\n\n`;
+      await talkToPage(tab.id, { type: "execute", command: { do: "set_dictation_text", text, note: "new paragraph" } });
+      await setMode({ ...mode, text });
+      return report({ kind: "wrote", message: text, why: decision.why });
+    }
+
+    case "undo": {
+      const result = await talkToPage(tab.id, { type: "execute", command: { do: "undo_dictation" } });
+      if (result.ok) await setMode({ ...mode, text: result.text ?? "" });
+      return report({ kind: result.ok ? "wrote" : "error", message: result.ok ? (result.text ?? "") : result.error, why: decision.why });
+    }
+
+    case "clear":
+      await setPending({ command: { do: "clear_dictation" }, tabId: tab.id, utterance: transcript, dictation: true });
+      return report({ kind: "confirm", message: "Erase everything written so far?", why: decision.why });
+
+    case "send":
+      await setPending({ command: { do: "submit_dictation" }, tabId: tab.id, utterance: transcript, dictation: true });
+      return report({ kind: "confirm", message: `Send this?\n\n${mode.text ?? ""}`, why: decision.why });
+
+    case "finish":
+      await talkToPage(tab.id, { type: "execute", command: { do: "unbind_dictation" } }).catch(() => {});
+      await setMode(null);
+      return { ...report({ kind: "done", message: "stopped writing", why: decision.why }), dictation: { active: false } };
+
+    default:
+      return report({ kind: "error", message: `unhandled dictation action ${decision.do}` });
+  }
+}
+
 async function carryOut(decision, tab, transcript) {
   switch (decision.kind) {
     case "ignore":
@@ -171,6 +256,18 @@ async function carryOut(decision, tab, transcript) {
     case "ask_page":
       return await answerAboutPage(tab, transcript);
 
+    case "compose": {
+      const result = await talkToPage(tab.id, { type: "execute", command: decision.command })
+        .catch((error) => ({ ok: false, error: error.message }));
+      if (!result.ok) return { kind: "error", message: result.error, why: "compose_bind_failed" };
+      await setMode({ tabId: tab.id, fieldId: decision.fieldId, label: result.label, text: result.text ?? "" });
+      return {
+        kind: "composing",
+        message: `Writing into ${result.label || "the field"}. Say "stop dictating" when done.`,
+        dictation: { active: true, label: result.label, text: result.text ?? "" },
+      };
+    }
+
     case "execute":
       return await run(decision.command, tab.id);
 
@@ -182,6 +279,15 @@ async function carryOut(decision, tab, transcript) {
 // A pending confirmation must outlive the service worker, which Chrome stops
 // after ~30s idle. A module variable would be gone by the time you answered.
 const PENDING_KEY = "pendingConfirmation";
+const MODE_KEY = "dictationMode";
+
+async function getMode() {
+  return (await chrome.storage.session.get(MODE_KEY))[MODE_KEY] ?? null;
+}
+async function setMode(value) {
+  if (value) await chrome.storage.session.set({ [MODE_KEY]: value });
+  else await chrome.storage.session.remove(MODE_KEY);
+}
 
 async function setPending(value) {
   await chrome.storage.session.set({ [PENDING_KEY]: value });
@@ -337,7 +443,20 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
         const pending = await takePending();
         if (!pending) return respond({ kind: "error", message: "nothing to confirm" });
         const { command, tabId, utterance } = pending;
-        const outcome = msg.yes ? await run(command, tabId) : { kind: "ignored", message: "cancelled by user" };
+        let outcome;
+        if (!msg.yes) {
+          outcome = { kind: "ignored", message: "cancelled by user" };
+        } else if (pending.dictation) {
+          const r = await talkToPage(tabId, { type: "execute", command }).catch((e) => ({ ok: false, error: e.message }));
+          outcome = r.ok ? { kind: "done", message: r.did ?? "done" } : { kind: "error", message: r.error };
+          if (command.do === "submit_dictation" && r.ok) await setMode(null);
+          if (command.do === "clear_dictation" && r.ok) {
+            const mode = await getMode();
+            if (mode) await setMode({ ...mode, text: "" });
+          }
+        } else {
+          outcome = await run(command, tabId);
+        }
         await record({
           utterance: `${utterance ?? "(confirm)"} → ${msg.yes ? "CONFIRMED" : "CANCELLED"}`,
           executed: msg.yes && outcome.kind === "done",
@@ -347,6 +466,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
           command,
         });
         respond(outcome);
+      } else if (msg.type === "dictation_state") {
+        respond({ mode: await getMode() });
+      } else if (msg.type === "end_dictation") {
+        const mode = await getMode();
+        if (mode) await talkToPage(mode.tabId, { type: "execute", command: { do: "unbind_dictation" } }).catch(() => {});
+        await setMode(null);
+        respond({ kind: "done", message: "stopped writing", dictation: { active: false } });
       } else if (msg.type === "pick") {
         const tab = await activeTab();
         respond(await run({ do: "click", id: msg.id }, tab.id));

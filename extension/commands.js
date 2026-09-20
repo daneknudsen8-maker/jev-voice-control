@@ -27,6 +27,7 @@ export const KNOWN_SITES = {
 
 export const ACTIONS = {
   click: "Activate something on the page: a link, button, checkbox, menu item, or tab. Use for 'click', 'press', 'open', 'select', 'choose', 'tap', 'hit'.",
+  compose: "Begin dictating a longer piece of writing into a field on the page — an email, a message, a comment, a post. Use when the user wants to START writing and will speak the words after, e.g. 'write an email', 'compose a message', 'start dictating in the comment box', 'let me write a reply'. NOT for a short phrase the user already said in the same breath.",
   type: "Enter text into a field or text box ON THE CURRENT PAGE. Use for 'type ...', 'enter ...', 'write ...', 'put ... in the ... box', and for searching the current site when the user says so explicitly: 'search this site for ...', 'search the page for ...', 'search Amazon for ...'.",
   scroll: "Move the page up or down without activating anything.",
   navigate: "Leave the current page for a different website or a WEB search. Use for 'go to ...', 'open ...', 'google ...', and for a plain 'search for ...' with no site named — a bare search means the whole web. Use only when the destination is NOT already open in `open_tabs`.",
@@ -251,6 +252,20 @@ export function resolveCommand(answers, ctx) {
       }
       const el = byId.get(target.choice);
       return confirmFor({ do: "click", id: target.choice }, el?.text ?? "that");
+    }
+
+    case "compose": {
+      const field = answers.field;
+      if (!field || field.choice === "no_match") {
+        return { kind: "clarify", why: "no_field_to_compose",
+                 say: "I don't see a text box to write in — open one first, or say 'click compose'.",
+                 detail: "no typeable field on the page" };
+      }
+      if (field.confidence < FLOORS.field) {
+        return { kind: "clarify", why: "field_unresolved", say: "Which box should I write in?",
+                 detail: `field conf ${field.confidence.toFixed(2)} < ${FLOORS.field}` };
+      }
+      return { kind: "compose", why: "ok", command: { do: "bind_dictation", id: field.choice }, fieldId: field.choice };
     }
 
     case "type": {

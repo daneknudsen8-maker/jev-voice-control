@@ -75,8 +75,9 @@ for (const testCase of cases) {
 
   // What did the resolver actually produce?
   const cmd = decision.command;
-  let resolved, actual;
-  if (decision.kind === "ask_page")       { resolved = "ask_page"; actual = "ask_page"; }
+  let resolved, actual, cmdId;
+  if (decision.kind === "compose")        { resolved = `compose→${decision.fieldId}`; actual = "compose"; cmdId = decision.fieldId; }
+  else if (decision.kind === "ask_page")  { resolved = "ask_page"; actual = "ask_page"; }
   else if (decision.kind === "ignore")    { resolved = `ignore`; actual = "none"; }
   else if (decision.kind === "clarify")   { resolved = `clarify`; actual = "clarify"; }
   else if (decision.kind === "choose")    { resolved = `choose(${decision.options.length})`; actual = "choose"; }
@@ -93,7 +94,7 @@ for (const testCase of cases) {
 
   // Did we get the intent right, and the target when one was specified?
   let ok = actual === testCase.expect;
-  if (ok && testCase.target) ok = (cmd?.id === testCase.target);
+  if (ok && testCase.target) ok = ((cmdId ?? cmd?.id) === testCase.target);
   if (ok && testCase.url) ok = (cmd?.url === testCase.url);
   if (ok && testCase.search) ok = Boolean(cmd?.url?.includes("google.com/search"));
   if (testCase.risky && decision.kind !== "confirm") ok = false;

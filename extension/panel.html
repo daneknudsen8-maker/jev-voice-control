@@ -15,6 +15,16 @@
 
   <p id="heard" class="heard" aria-live="polite"></p>
 
+  <section id="composer" class="composer" hidden>
+    <div class="composer-head">
+      <span class="badge">writing</span>
+      <span id="composer-target"></span>
+      <button id="composer-stop" class="link">stop</button>
+    </div>
+    <pre id="composer-text" class="composer-text" aria-live="polite"></pre>
+    <p class="composer-hint">Everything you say goes into the message. Say <b>"stop dictating"</b>, <b>"new paragraph"</b>, <b>"scratch that"</b>, or <b>"send it"</b>.</p>
+  </section>
+
   <div id="prompt" class="prompt" hidden>
     <p id="prompt-text"></p>
     <div id="prompt-actions" class="actions"></div>

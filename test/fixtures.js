@@ -75,6 +75,10 @@ export const CASES = [
   // Bare "search for X" = the web. Naming the site = the page's own box.
   { say: "search for the best mechanical keyboards", expect: "navigate", search: true },
   { say: "search this site for rust",                expect: "type", target: "e20" },
+  // compose starts dictation; type writes one phrase already spoken.
+  { say: "write an email",                           expect: "clarify" },  // no email box on this page — correct to ask
+  { say: "let me dictate a comment",                 expect: "compose",    target: "e21" },
+  { say: "start writing in the comment box",         expect: "compose",    target: "e21" },
 ];
 
 // Same utterances on a blank new tab: no elements, no fields, nothing to read.

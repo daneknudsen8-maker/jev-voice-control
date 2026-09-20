@@ -7,6 +7,7 @@ const $ = (id) => document.getElementById(id);
 const toggle = $("toggle"), label = $("toggle-label"), status = $("status");
 const heard = $("heard"), log = $("log"), usage = $("usage");
 const prompt = $("prompt"), promptText = $("prompt-text"), promptActions = $("prompt-actions");
+const composer = $("composer"), composerText = $("composer-text"), composerTarget = $("composer-target");
 
 let listening = false;
 let busy = false;
@@ -23,6 +24,27 @@ const recognizer = createRecognizer({
 });
 
 function setStatus(text) { status.textContent = text; }
+
+/** Show or hide the composer. While it is visible, speech becomes text. */
+function showComposer(state) {
+  if (state?.active) {
+    composer.hidden = false;
+    document.body.classList.add("dictating");
+    composerTarget.textContent = state.label ? `into ${state.label}` : "into the page";
+    if (state.text !== undefined) composerText.textContent = state.text;
+    composerText.scrollTop = composerText.scrollHeight;
+    setStatus("writing");
+  } else {
+    composer.hidden = true;
+    document.body.classList.remove("dictating");
+    composerText.textContent = "";
+    setStatus(listening ? "listening" : "idle");
+  }
+}
+
+$("composer-stop").addEventListener("click", async () => {
+  render(await chrome.runtime.sendMessage({ type: "end_dictation" }), "");
+});
 
 function add(kind, message, meta) {
   const li = document.createElement("li");
@@ -79,9 +101,21 @@ function render(result, transcript) {
     usage.textContent = `${ms}ms · ${input_tokens} tok · ${model}`;
   }
 
+  if (result.dictation) showComposer(result.dictation);
+
   const meta = debugLine(result);
 
   switch (result.kind) {
+    case "composing":
+      add("done", result.message, meta);
+      break;
+
+    case "wrote":
+      composerText.textContent = result.message;
+      composerText.scrollTop = composerText.scrollHeight;
+      add("done", `wrote: ${String(result.message).split("\n").pop().slice(-60)}`, meta);
+      break;
+
     case "done":
       add("done", result.message, meta);
       break;
@@ -129,8 +163,10 @@ function render(result, transcript) {
 
 function debugLine(result) {
   const a = result.answers;
-  if (!a) return result.debug ?? undefined;
+  if (!a) return result.detail ?? result.debug ?? undefined;
   const bits = [];
+  if (a.is_content) bits.push(`content ${a.is_content.noul.toFixed(2)}`);
+  if (a.control) bits.push(`${a.control.choice} ${a.control.confidence.toFixed(2)}`);
   if (a.action) bits.push(`${a.action.choice} ${a.action.confidence.toFixed(2)}`);
   if (a.is_command) bits.push(`cmd ${a.is_command.noul.toFixed(2)}`);
   if (a.risk) bits.push(`risk ${a.risk.score.toFixed(2)}`);
@@ -165,6 +201,10 @@ addEventListener("keydown", (event) => {
   }
   if (event.code === "Escape" && listening) setListening(false);
 });
+
+chrome.runtime.sendMessage({ type: "dictation_state" }).then((r) => {
+  if (r?.mode) showComposer({ active: true, label: r.mode.label, text: r.mode.text });
+}).catch(() => {});
 
 if (!recognizer.available()) {
   add("error", "No Web Speech API in this browser. Chrome is required.");

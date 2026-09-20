@@ -13,6 +13,10 @@ const MAX_TEXT = 90;
 let registry = new Map();  // id -> Element, rebuilt each inventory
 let counter = 0;
 
+// Dictation binds to one element and survives inventory rebuilds, which would
+// otherwise drop the id out from under an in-progress message.
+let dictation = null;  // { el, chunks: [] }
+
 const CLICKABLE = [
   "a[href]", "button", "[role=button]", "[role=link]", "[role=tab]",
   "[role=menuitem]", "[role=option]", "[role=checkbox]", "[role=radio]",
@@ -175,8 +179,71 @@ function setValue(el, text) {
   el.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
+/** Read whatever is currently in a field. */
+function readField(el) {
+  return el.isContentEditable ? el.innerText : (el.value ?? "");
+}
+
 function execute(command) {
   switch (command.do) {
+    case "bind_dictation": {
+      const el = registry.get(command.id) ?? document.activeElement;
+      if (!el || !(el.isContentEditable || "value" in el)) {
+        return { ok: false, error: "that isn't a text field" };
+      }
+      dictation = { el, chunks: [] };
+      el.focus();
+      el.scrollIntoView({ block: "center", behavior: "smooth" });
+      flash(el, "#3b82f6");
+      return { ok: true, did: `writing into ${labelFor(el) || "the field"}`, text: readField(el), label: labelFor(el) };
+    }
+
+    // The background computes the assembled text (spacing, capitals, spoken
+    // punctuation all live in dictation.js) and sends the full new value.
+    case "set_dictation_text": {
+      if (!dictation?.el?.isConnected) return { ok: false, error: "the field went away" };
+      dictation.chunks.push({ before: readField(dictation.el) });   // for undo
+      setValue(dictation.el, command.text);
+      dictation.el.scrollIntoView({ block: "center" });
+      return { ok: true, did: command.note ?? "wrote that", text: command.text };
+    }
+
+    case "undo_dictation": {
+      if (!dictation?.el?.isConnected) return { ok: false, error: "the field went away" };
+      const last = dictation.chunks.pop();
+      if (!last) return { ok: false, error: "nothing to undo" };
+      setValue(dictation.el, last.before);
+      return { ok: true, did: "removed that", text: last.before };
+    }
+
+    case "clear_dictation": {
+      if (!dictation?.el?.isConnected) return { ok: false, error: "the field went away" };
+      dictation.chunks.push({ before: readField(dictation.el) });
+      setValue(dictation.el, "");
+      return { ok: true, did: "cleared", text: "" };
+    }
+
+    case "read_dictation": {
+      if (!dictation?.el?.isConnected) return { ok: false, error: "the field went away" };
+      return { ok: true, text: readField(dictation.el), label: labelFor(dictation.el) };
+    }
+
+    case "unbind_dictation":
+      dictation = null;
+      return { ok: true, did: "stopped writing" };
+
+    case "submit_dictation": {
+      if (!dictation?.el?.isConnected) return { ok: false, error: "the field went away" };
+      const el = dictation.el;
+      // Prefer the form's own submit button; fall back to Enter.
+      const form = el.closest("form");
+      const button = form?.querySelector("button[type=submit], input[type=submit]")
+        ?? form?.querySelector("button:not([type=button])");
+      if (button) { button.click(); return { ok: true, did: `submitted via "${labelFor(button)}"` }; }
+      el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true }));
+      return { ok: true, did: "pressed Enter" };
+    }
+
     case "scroll": {
       const amount = Math.round(innerHeight * 0.8);
       const map = {
