@@ -1,7 +1,7 @@
 // The panel owns the microphone and renders what happened. All decisions live
 // in background.js; this file is presentation plus the mic lifecycle.
 
-import { createRecognizer } from "./speech/index.js";
+import { createRecognizer, ENGINES } from "./speech/index.js";
 
 const $ = (id) => document.getElementById(id);
 const toggle = $("toggle"), label = $("toggle-label"), status = $("status");
@@ -9,13 +9,14 @@ const heard = $("heard"), log = $("log"), usage = $("usage");
 const prompt = $("prompt"), promptText = $("prompt-text"), promptActions = $("prompt-actions");
 const composer = $("composer"), composerText = $("composer-text"), composerTarget = $("composer-target");
 const mail = $("mail"), mailFields = $("mail-fields");
+const engineSelect = $("engine"), entry = $("entry"), commandInput = $("command");
 
 let listening = false;
 let busy = false;
 let lastSaid = "";
 
-const recognizer = createRecognizer({
-  onListening: () => setStatus("listening"),
+const HANDLERS = {
+  onListening: () => setStatus(engine === "text" ? "ready — type or dictate" : "listening"),
   onPartial: (text) => { heard.textContent = text; heard.classList.remove("final"); },
   onFinal: (text) => {
     heard.textContent = text;
@@ -23,6 +24,46 @@ const recognizer = createRecognizer({
     submit(text);
   },
   onError: (message) => { add("error", message); setListening(false); },
+};
+
+// Remembered per browser; the panel is reopened often.
+let engine = (() => {
+  try { return localStorage.getItem("jev.engine") ?? "webspeech"; } catch { return "webspeech"; }
+})();
+let recognizer = createRecognizer(HANDLERS, { engine, input: commandInput });
+
+function applyEngine(next) {
+  const wasListening = listening;
+  if (wasListening) setListening(false);
+
+  engine = next;
+  try { localStorage.setItem("jev.engine", next); } catch { /* private window */ }
+
+  engineSelect.value = next;
+  entry.hidden = !ENGINES[next].needsInput;
+  document.body.classList.toggle("text-engine", next === "text");
+  label.textContent = next === "text" ? "Start" : "Start listening";
+
+  recognizer = createRecognizer(HANDLERS, { engine: next, input: commandInput });
+  if (wasListening) setListening(true);
+}
+
+engineSelect.addEventListener("change", (event) => applyEngine(event.target.value));
+
+// Wispr Flow types into whatever field has focus. If focus leaves this box
+// while the text engine is on, the next thing dictated lands in the web page
+// instead — so say so loudly rather than letting it happen quietly.
+commandInput.addEventListener("blur", () => {
+  if (engine === "text" && listening) setStatus("⚠ box not focused — click it before dictating");
+});
+commandInput.addEventListener("focus", () => {
+  if (engine === "text" && listening) setStatus("ready — type or dictate");
+});
+// Clicking anywhere in the panel puts focus back where dictation should land.
+addEventListener("click", (event) => {
+  if (engine !== "text" || !listening) return;
+  if (event.target.closest("button, select, input, a")) return;
+  commandInput.focus();
 });
 
 function setStatus(text) { status.textContent = text; }
@@ -264,7 +305,9 @@ async function send(message) {
 function setListening(on) {
   listening = on;
   toggle.setAttribute("aria-pressed", String(on));
-  label.textContent = on ? "Stop listening" : "Start listening";
+  label.textContent = on
+    ? (engine === "text" ? "Stop" : "Stop listening")
+    : (engine === "text" ? "Start" : "Start listening");
   setStatus(on ? "listening" : "idle");
   if (on) recognizer.start(); else { recognizer.stop(); heard.textContent = ""; }
 }
@@ -273,6 +316,7 @@ toggle.addEventListener("click", () => setListening(!listening));
 
 // Space toggles, Escape stops — as long as focus isn't on a button.
 addEventListener("keydown", (event) => {
+  if (event.target === commandInput && event.code !== "Escape") return;
   if (event.code === "Space" && event.target === document.body) {
     event.preventDefault();
     setListening(!listening);
@@ -289,7 +333,8 @@ chrome.runtime.sendMessage({ type: "dictation_state" }).then((r) => {
   }
 }).catch(() => {});
 
+applyEngine(engine);
+
 if (!recognizer.available()) {
-  add("error", "No Web Speech API in this browser. Chrome is required.");
-  toggle.disabled = true;
+  add("error", "No Web Speech API in this browser — switch the source to \"Wispr Flow / typing\".");
 }

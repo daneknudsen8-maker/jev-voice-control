@@ -11,7 +11,17 @@
       <span class="dot"></span><span id="toggle-label">Start listening</span>
     </button>
     <span id="status" class="status">idle</span>
+    <select id="engine" class="engine" title="Where transcripts come from">
+      <option value="webspeech">Chrome mic</option>
+      <option value="text">Wispr Flow / typing</option>
+    </select>
   </header>
+
+  <div id="entry" class="entry" hidden>
+    <input id="command" type="text" placeholder="Hold your Wispr Flow hotkey and speak, or type…"
+           autocomplete="off" spellcheck="false" aria-label="Command">
+    <p class="entry-hint">Sends on Enter, or when dictation stops. Keep this box focused.</p>
+  </div>
 
   <p id="heard" class="heard" aria-live="polite"></p>
 

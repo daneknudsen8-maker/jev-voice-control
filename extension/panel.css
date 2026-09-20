@@ -85,3 +85,18 @@ body.dictating .mic[aria-pressed="true"] { background: var(--ok); }
 .mail-fields dd.active { box-shadow: inset 2px 0 0 var(--accent); padding-left: 7px; }
 .mail-fields dd.body { max-height: 160px; overflow-y: auto; }
 #mail-hint { font-size: 11px; color: var(--muted); }
+
+/* Transcripts as text: Wispr Flow types here, we submit when it stops. */
+.engine {
+  margin-left: auto; padding: 4px 8px; border: 1px solid var(--line); border-radius: 7px;
+  background: var(--bg); color: var(--fg); font: inherit; font-size: 12px; cursor: pointer;
+}
+.entry { display: flex; flex-direction: column; gap: 5px; }
+#command {
+  width: 100%; padding: 10px 12px; border: 2px solid var(--line); border-radius: 9px;
+  background: var(--bg); color: var(--fg); font: inherit; font-size: 15px;
+}
+#command:focus { outline: none; border-color: var(--accent); }
+body.text-engine #command:not(:focus) { border-color: var(--warn); }
+.entry-hint { margin: 0; font-size: 11px; color: var(--muted); }
+body.text-engine .mic .dot { background: var(--ok); animation: none; }
