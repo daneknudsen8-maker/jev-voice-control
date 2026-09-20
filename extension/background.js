@@ -1,7 +1,7 @@
 // Orchestrator. Owns tab operations and all traffic to the proxy.
 // The panel sends transcripts here; this decides what happens.
 
-import { buildCommandQuestions, matchLocalCommand, resolveCommand, splitSteps } from "./commands.js";
+import { buildCommandQuestions, matchLocalCommand, matchTabNavigation, resolveCommand, splitSteps } from "./commands.js";
 import { appendChunk, buildDictationQuestions, resolveDictation } from "./dictation.js";
 import "./open-panel.js";
 
@@ -32,6 +32,43 @@ async function askJev(state, questions) {
   return json.answers;
 }
 
+/** Move between tabs by position. All arithmetic, so none of it involves Jev. */
+async function moveTab(spec) {
+  const current = await activeTab();
+  const tabs = (await chrome.tabs.query({ windowId: current.windowId })).filter((t) => !isOurs(t));
+  if (tabs.length < 2 && spec.move !== "back") {
+    return { kind: "error", message: "there's only one tab open", why: "single_tab" };
+  }
+
+  if (spec.move === "back") {
+    const history = (await chrome.storage.session.get(TAB_HISTORY_KEY))[TAB_HISTORY_KEY] ?? [];
+    const previous = history.find((id) => id !== current.id);
+    if (previous === undefined) return { kind: "error", message: "no other tab to go back to", why: "no_tab_history" };
+    try {
+      const tab = await chrome.tabs.update(previous, { active: true });
+      await chrome.windows.update(tab.windowId, { focused: true });
+      return { kind: "done", message: `back to ${(tab.title ?? "that tab").slice(0, 50)}` };
+    } catch {
+      return { kind: "error", message: "that tab was closed", why: "tab_gone" };
+    }
+  }
+
+  const index = tabs.findIndex((t) => t.id === current.id);
+  const count = spec.count ?? 1;
+  let target;
+  if (spec.move === "first") target = 0;
+  else if (spec.move === "last") target = tabs.length - 1;
+  else {
+    // Wrap around, the way ctrl-tab does.
+    const delta = spec.move === "right" ? count : -count;
+    target = ((index + delta) % tabs.length + tabs.length) % tabs.length;
+  }
+
+  const tab = tabs[target];
+  await chrome.tabs.update(tab.id, { active: true });
+  return { kind: "done", message: `${(tab.title ?? "tab").slice(0, 50)}` };
+}
+
 /** Resolve once the tab has finished loading, or after a ceiling. */
 function waitForTabLoad(tabId, timeoutMs = 10_000) {
   return new Promise((resolve) => {
@@ -50,10 +87,49 @@ function waitForTabLoad(tabId, timeoutMs = 10_000) {
   });
 }
 
+const LAST_TAB_KEY = "lastRealTab";
+const TAB_HISTORY_KEY = "tabHistory";
+
+function isOurs(tab) {
+  return !tab?.url || tab.url.startsWith(chrome.runtime.getURL(""));
+}
+
+// Remember the page you were last on. Clicking a button in the panel makes the
+// panel the last-focused window, so querying for it would aim every following
+// command at ourselves instead of your page.
+async function rememberTab(tabId) {
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    if (isOurs(tab)) return;
+    const history = (await chrome.storage.session.get(TAB_HISTORY_KEY))[TAB_HISTORY_KEY] ?? [];
+    const next = [tab.id, ...history.filter((id) => id !== tab.id)].slice(0, 10);
+    await chrome.storage.session.set({ [LAST_TAB_KEY]: tab.id, [TAB_HISTORY_KEY]: next });
+  } catch { /* tab already gone */ }
+}
+
+chrome.tabs.onActivated.addListener(({ tabId }) => { rememberTab(tabId); });
+chrome.windows.onFocusChanged.addListener(async (windowId) => {
+  if (windowId === chrome.windows.WINDOW_ID_NONE) return;
+  const [tab] = await chrome.tabs.query({ active: true, windowId });
+  if (tab) await rememberTab(tab.id);
+});
+
 async function activeTab() {
-  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-  if (!tab) throw new Error("no active tab");
-  return tab;
+  const focused = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (focused[0] && !isOurs(focused[0])) return focused[0];
+
+  // The panel had focus. Fall back to the page you were actually last on.
+  const storedId = (await chrome.storage.session.get(LAST_TAB_KEY))[LAST_TAB_KEY];
+  if (storedId !== undefined) {
+    try {
+      const tab = await chrome.tabs.get(storedId);
+      if (!isOurs(tab)) return tab;
+    } catch { /* closed since */ }
+  }
+
+  const anyActive = (await chrome.tabs.query({ active: true })).filter((t) => !isOurs(t));
+  if (anyActive.length) return anyActive[0];
+  throw new Error("no page open — open a website first");
 }
 
 /**
@@ -93,7 +169,7 @@ async function talkToPage(tabId, message) {
 async function openTabs(currentId) {
   const tabs = await chrome.tabs.query({ currentWindow: true });
   return tabs
-    .filter((t) => t.id !== currentId)
+    .filter((t) => t.id !== currentId && !isOurs(t))
     .slice(0, 20)
     .map((t) => ({
       id: `t${t.id}`,
@@ -111,6 +187,10 @@ async function handleUtterance(transcript) {
   // While a message is open, almost everything said is words for that message.
   const mode = await getMode();
   if (mode) return await handleDictation(transcript, mode);
+
+  // Tab movement by position: arithmetic, so code decides it.
+  const tabMove = matchTabNavigation(transcript);
+  if (tabMove) return { ...(await moveTab(tabMove)), why: "tab_navigation", local: true };
 
   const tab = await activeTab();
 
@@ -327,6 +407,36 @@ async function carryOut(decision, tab, transcript) {
 
     case "ask_page":
       return await answerAboutPage(tab, transcript);
+
+    // Click the thing that opens a composer, wait for it, then bind to the box
+    // it produced. Two page interactions, one spoken command.
+    case "compose_via": {
+      const clicked = await talkToPage(tab.id, { type: "execute", command: decision.command })
+        .catch((error) => ({ ok: false, error: error.message }));
+      if (!clicked.ok) return { kind: "error", message: clicked.error, why: "composer_open_failed" };
+
+      await new Promise((r) => setTimeout(r, 700));   // let the composer appear
+
+      const fresh = await talkToPage(tab.id, { type: "inventory", utterance: transcript })
+        .catch(() => ({ typeables: [] }));
+      // Prefer a big box (a message body) over a one-line input.
+      const box = fresh.typeables.find((t) => /area|body|message|contenteditable|textbox/i.test(`${t.kind} ${t.text}`))
+               ?? fresh.typeables[0];
+      if (!box) {
+        return { kind: "clarify", message: `Opened it, but I don't see a box to write in yet — say "write an email" again.`, why: "composer_no_field" };
+      }
+
+      const bound = await talkToPage(tab.id, { type: "execute", command: { do: "bind_dictation", id: box.id } })
+        .catch((error) => ({ ok: false, error: error.message }));
+      if (!bound.ok) return { kind: "error", message: bound.error, why: "compose_bind_failed" };
+
+      await setMode({ tabId: tab.id, fieldId: box.id, label: bound.label, text: bound.text ?? "" });
+      return {
+        kind: "composing",
+        message: `Opened it. Writing into ${bound.label || "the message"}. Say "stop dictating" when done.`,
+        dictation: { active: true, label: bound.label, text: bound.text ?? "" },
+      };
+    }
 
     case "compose": {
       const result = await talkToPage(tab.id, { type: "execute", command: decision.command })

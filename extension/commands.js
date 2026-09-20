@@ -153,7 +153,7 @@ export function buildCommandQuestions({ elements, tabs, typeables, steps }) {
       type: "choice",
       instructions: {
         question: "If `utterance` asks to click or activate something, which entry in `elements` does it mean?",
-        focus: "Match on what the user said against each element's text and role. Prefer an exact wording match; otherwise the closest meaning.",
+        focus: "Match what the user said against each element's text and role. Prefer an exact wording match, then closest meaning. When the user says a position such as 'the second email' or 'the last link', use each entry's `position` label — the entries are listed in page order.",
       },
       criteria: {
         ...Object.fromEntries(elements.map((el) => [el.id, describeElement(el)])),
@@ -194,9 +194,50 @@ export function buildCommandQuestions({ elements, tabs, typeables, steps }) {
 function describeElement(el) {
   const d = { role: el.kind, text: el.text };
   if (el.hint) d.description = el.hint;
-  if (el.where) d.position = el.where;
+  if (el.where) d.region = el.where;
+  // Position is given as a label so "the second email" is a selection rather
+  // than a count — see docs/typesafe/01-limits.md #2.
+  if (el.position) d.position = `${el.position} in ${el.where}`;
+  if (el.last) d.note = "the last one";
   return d;
 }
+
+/**
+ * Naming a thing with no verb — "Loom", "starred", "inbox" — is a real way
+ * people talk to a voice interface, but it reads as conversation, so the
+ * is_command Noul rightly scores it low. Rather than lower that bar for
+ * everything (microphone noise scored 0.23 in practice), allow it only when the
+ * words uniquely match something actually on screen.
+ */
+function normalize(text) {
+  return String(text ?? "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+export function strongNameMatch(transcript, elements = [], tabs = []) {
+  const said = normalize(transcript);
+  if (said.length < 3 || said.split(" ").length > 4) return null;
+
+  const hit = (text) => {
+    const candidate = normalize(text);
+    if (!candidate) return false;
+    if (candidate === said) return true;
+    // Whole-word containment, so "C" never matches "CMC" and "compost" never
+    // matches "compose".
+    return new RegExp(`(^|\\s)${said.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|\\s)`).test(candidate);
+  };
+
+  const tabHits = tabs.filter((t) => hit(t.title) || hit(t.host));
+  const elementHits = elements.filter((e) => hit(e.text));
+
+  // Ambiguous means it is not a name, it is a word. Only a unique hit counts.
+  if (tabHits.length === 1 && elementHits.length === 0) return { kind: "tab", id: tabHits[0].id, label: tabHits[0].title };
+  if (elementHits.length === 1 && tabHits.length === 0) return { kind: "element", id: elementHits[0].id, label: elementHits[0].text };
+  if (tabHits.length === 1 && elementHits.length === 1) return { kind: "tab", id: tabHits[0].id, label: tabHits[0].title };
+  return null;
+}
+
+// Below this there is not even enough signal to trust a name match.
+const NAME_MATCH_FLOOR = 0.15;
 
 // Confidence floors, scaled to consequence — docs/typesafe/00-core.md.
 // Below the floor we ask rather than act.
@@ -231,6 +272,15 @@ export function resolveCommand(answers, ctx) {
     return { kind: "execute", command: { do: "stop_listening" }, why: "ok" };
   }
   if (isCommand < IS_COMMAND_FLOOR) {
+    // A bare name that matches exactly one thing on screen is a command.
+    const named = isCommand >= NAME_MATCH_FLOOR ? strongNameMatch(transcript, elements, tabs) : null;
+    if (named) {
+      return named.kind === "tab"
+        ? { kind: "execute", command: { do: "switch_tab", id: named.id }, why: "named_tab",
+            detail: `bare name matched tab "${named.label}" (is_command ${isCommand.toFixed(2)})` }
+        : { kind: "execute", command: { do: "click", id: named.id }, why: "named_element",
+            detail: `bare name matched "${named.label}" (is_command ${isCommand.toFixed(2)})` };
+    }
     return { kind: "ignore", why: "not_a_command", detail: `is_command ${isCommand.toFixed(2)} < ${IS_COMMAND_FLOOR}`, isCommand };
   }
   if (action.choice === "none") {
@@ -284,9 +334,18 @@ export function resolveCommand(answers, ctx) {
     case "compose": {
       const field = answers.field;
       if (!field || field.choice === "no_match") {
+        // No writable box yet. If something on the page looks like it opens one
+        // — Gmail's Compose, a "Reply" or "New message" button — click that
+        // first and bind to whatever box it produces.
+        const opener = answers.target;
+        if (opener && opener.choice !== "no_match" && opener.confidence >= FLOORS.target) {
+          return { kind: "compose_via", why: "open_composer_first",
+                   command: { do: "click", id: opener.choice },
+                   detail: `no field yet; opening via "${elements.find((e) => e.id === opener.choice)?.text ?? opener.choice}"` };
+        }
         return { kind: "clarify", why: "no_field_to_compose",
                  say: "I don't see a text box to write in — open one first, or say 'click compose'.",
-                 detail: "no typeable field on the page" };
+                 detail: "no typeable field and nothing that looks like it opens one" };
       }
       if (field.confidence < FLOORS.field) {
         return { kind: "clarify", why: "field_unresolved", say: "Which box should I write in?",
@@ -400,6 +459,43 @@ const LOCAL_COMMANDS = [
   [/^(?:jev[,\s]+)?(?:go\s+to\s+sleep|sleep|shut\s+up|never\s+mind)$/i, { do: "stop_listening" }],
   [/^(?:jev[,\s]+)?stop$/i, { do: "stop_listening" }],
 ];
+
+/**
+ * Tab movement by position rather than by name. Position is arithmetic, and Jev
+ * is documented as unreliable at it — "go left one tab" scored 0.17 in practice.
+ * Code owns it: deterministic, instant, free.
+ *
+ * Returns { move: "left"|"right"|"first"|"last"|"back", count } or null.
+ */
+const TAB_MOVES = [
+  // "switch back" is the last tab you used. Plain "go back" is NOT here: that is
+  // browser history, and stealing it would break a much commoner command.
+  [/^(?:go\s+|move\s+|switch\s+)?back\s+to(?:\s+the)?\s+(?:other|previous|last)\s+tab$/i, { move: "back" }],
+  [/^switch\s+back$/i, { move: "back" }],
+  [/^(?:the\s+)?other\s+tab$/i, { move: "back" }],
+  [/^(?:go\s+|move\s+|switch\s+(?:to\s+)?)?(?:the\s+)?(?:next|right)\s+tab$/i, { move: "right" }],
+  [/^(?:go\s+|move\s+|switch\s+(?:to\s+)?)?(?:the\s+)?(?:previous|prior|left)\s+tab$/i, { move: "left" }],
+  [/^(?:go|move)\s+(left|right)(?:\s+(one|two|three|\d+))?(?:\s+tabs?)?$/i, "directional"],
+  [/^(?:switch\s+to\s+)?(?:the\s+)?tab\s+to\s+the\s+(left|right)(?:\s+of.*)?$/i, "directional"],
+  [/^(?:go\s+|switch\s+to\s+)?(?:the\s+)?(first|last)\s+tab$/i, "position"],
+];
+
+const WORD_COUNTS = { one: 1, two: 2, three: 3, four: 4, five: 5 };
+
+export function matchTabNavigation(transcript) {
+  const text = transcript.trim().replace(/[.!?]+$/, "");
+  for (const [pattern, spec] of TAB_MOVES) {
+    const m = text.match(pattern);
+    if (!m) continue;
+    if (spec === "directional") {
+      const count = m[2] ? (WORD_COUNTS[m[2].toLowerCase()] ?? Number(m[2]) ?? 1) : 1;
+      return { move: m[1].toLowerCase(), count: Number.isFinite(count) ? count : 1 };
+    }
+    if (spec === "position") return { move: m[1].toLowerCase() === "first" ? "first" : "last" };
+    return { ...spec, count: 1 };
+  }
+  return null;
+}
 
 export function matchLocalCommand(transcript) {
   const text = transcript.trim().replace(/[.!?]+$/, "");

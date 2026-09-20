@@ -86,7 +86,16 @@ function affinity(text, words) {
   return hits;
 }
 
-function collect(selector, limit, words) {
+// "second", "third", "last" — positional references. Jev cannot count, so each
+// element is LABELLED with its position and Jev selects the label instead.
+const ORDINAL = /\b(first|1st|second|2nd|third|3rd|fourth|4th|fifth|5th|sixth|6th|seventh|7th|eighth|8th|ninth|9th|tenth|10th|last|next|top|bottom)\b/i;
+
+function ordinalLabel(n) {
+  const suffix = n % 100 >= 11 && n % 100 <= 13 ? "th" : ({ 1: "st", 2: "nd", 3: "rd" }[n % 10] ?? "th");
+  return `${n}${suffix}`;
+}
+
+function collect(selector, limit, words, utterance = "") {
   const out = [];
   for (const el of document.querySelectorAll(selector)) {
     const rect = visible(el);
@@ -107,13 +116,41 @@ function collect(selector, limit, words) {
     });
   }
 
-  out.sort((a, b) => b.score - a.score);
-  const kept = out.slice(0, limit);
+  // Number each element by its place in the page, among others of its kind in
+  // the same region. querySelectorAll is document order, so this is that order.
+  const seen = new Map();
+  out.forEach((c, documentIndex) => {
+    const group = `${c.kind}|${c.where}`;
+    const n = (seen.get(group) ?? 0) + 1;
+    seen.set(group, n);
+    c.nth = n;
+    c.documentIndex = documentIndex;
+    c.groupSize = 0;
+  });
+  for (const c of out) c.groupSize = seen.get(`${c.kind}|${c.where}`) ?? 1;
+
+  const ranked = [...out].sort((a, b) => b.score - a.score);
+  const kept = ranked.slice(0, limit);
+
+  // A positional request is about where things sit on the page, not about how
+  // well their text matches. Make sure the early ones are actually offered.
+  if (ORDINAL.test(utterance)) {
+    const head = [...out].sort((a, b) => a.documentIndex - b.documentIndex).slice(0, 12);
+    for (const c of head) if (!kept.includes(c)) kept.push(c);
+  }
+
+  // Back to page order so the numbering reads naturally in the request.
+  kept.sort((a, b) => a.documentIndex - b.documentIndex);
 
   return kept.map((c) => {
     const id = `e${counter++}`;
     registry.set(id, c.el);
-    return { id, text: c.text, kind: c.kind, where: c.where, hint: c.hint };
+    return {
+      id, text: c.text, kind: c.kind, where: c.where, hint: c.hint,
+      // e.g. "2nd of 14 links in main content"
+      position: c.groupSize > 1 ? `${ordinalLabel(c.nth)} of ${c.groupSize}` : undefined,
+      last: c.groupSize > 1 && c.nth === c.groupSize ? true : undefined,
+    };
   });
 }
 
@@ -127,8 +164,8 @@ function inventory(utterance = "") {
       url: location.href.slice(0, 200),
       host: location.host,
     },
-    elements: collect(CLICKABLE, MAX_CLICKABLE, words),
-    typeables: collect(TYPEABLE, MAX_TYPEABLE, words),
+    elements: collect(CLICKABLE, MAX_CLICKABLE, words, utterance),
+    typeables: collect(TYPEABLE, MAX_TYPEABLE, words, utterance),
   };
 }
 

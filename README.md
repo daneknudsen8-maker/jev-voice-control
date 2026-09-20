@@ -43,6 +43,9 @@ microphone.** Click *Start listening* (or press Space). Grant mic permission whe
 | Typing | "type nice write-up in the comment box", "search this site for rust" |
 | Writing | "write an email", "let me dictate a comment" → then just talk |
 | Tabs | "new tab", "switch to the gmail tab", "close this tab", "close the youtube tab" |
+| Tabs by position | "next tab", "previous tab", "go left two tabs", "switch back", "last tab" |
+| By position | "open the second email", "click the third link", "open the last one" |
+| By name alone | just say "Loom", "starred", "compose" — if it uniquely matches something on screen |
 | Going places | "go to hacker news", "go to espn", "open github.com", "take me to arstechnica dot com" |
 | Searching | "google mechanical keyboards" or "search for X" (the web) · "search this site for X" (the page's own box) |
 | Asking | "is there anything about kubernetes here", "find the pricing section" |
@@ -61,6 +64,20 @@ If a named site is already open in a tab, it switches to that tab instead of rel
 
 Commands that don't need page content — navigating, tabs, history — work on a blank new tab, where
 there is nothing to read.
+
+## Positional and bare-name targeting
+
+**Position:** "open the second email", "click the last link". Jev cannot count reliably, so each element
+is **labelled** with its place in the page ("2nd of 6 links in main content") and Jev selects the label
+instead of counting. A positional request also forces the first dozen elements in page order into the
+candidate list, since position is about where things sit, not how well their text matches.
+
+**Tab position** — "next tab", "go left two tabs", "switch back" — is arithmetic, so code handles it
+entirely. No model call, and "switch back" uses a real last-used-tab history.
+
+**Bare names:** saying just "Loom" or "starred" reads as conversation and scores low on `is_command`, so
+it used to be dropped. It is now allowed, but only when the words **uniquely** match one open tab or one
+element on the page. Microphone noise matches nothing and is still dropped.
 
 ## Chained commands
 
@@ -212,6 +229,7 @@ test/
   harness.js           browser-free evaluation against live Jev
   dictation-harness.js mode-confusion tests; fails loudly on dangerous misses
   multistep-harness.js chained commands vs single actions containing "and"
+  ordinal-harness.js   positional targeting over a realistic inbox
   fixtures.js          fake page, tabs, and the expected outcomes
 docs/typesafe/         full local TypeSafe docs — read 00-core.md first
 ```
