@@ -118,8 +118,8 @@ export function buildTaskQuestions({ elements, typeables, values, dates = [] }) 
         question: "If the next step is to click something, which entry in `elements` moves closest towards `goal`?",
         focus: "Prefer the element that advances the goal, not merely one that matches its words. Entries are listed in page order and carry a `position` label."
           + (dates.length
-            ? " When choosing a day in a calendar, use `dates`: the words in the goal have already been worked out into real dates there, so match those rather than interpreting the words again."
-            : ""),
+            ? " `dates` holds days already worked out from the goal's wording, and `today` gives the current date. Treat `dates` as a helpful reading rather than a instruction: if it disagrees with what the goal plainly says, or names a day this calendar does not show, go by the goal and `today`."
+            : " `today` gives the current date, for working out any day the goal refers to."),
       },
       criteria: {
         ...Object.fromEntries(elements.map((el) => [el.id, describe(el)])),
@@ -303,9 +303,10 @@ export function resolveDates(goal, today = new Date()) {
   for (const [index, name] of WEEKDAYS.entries()) {
     const m = said.match(new RegExp(`\\b(next|this|on)\\s+${name}\\b`));
     if (!m) continue;
+    // The nearest future occurrence. "Next friday" is ambiguous in English and
+    // this is the commoner reading; adding a week was measurably worse.
     let delta = (index - base.getDay() + 7) % 7;
     if (delta === 0) delta = 7;
-    if (m[1] === "next" && delta < 7) delta += 7;
     const day = addDays(base, delta);
     found.push({ label: `${m[1]} ${name}`, start: day, end: day });
   }

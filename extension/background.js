@@ -545,6 +545,10 @@ async function runTask(goal, existing = null) {
       elements: inv.elements,
       typeables: inv.typeables,
       history: task.steps.map((s) => s.label),
+      // Jev has no clock. This is the piece it actually cannot supply itself.
+      today: new Date().toLocaleDateString("en-US", {
+        weekday: "long", year: "numeric", month: "long", day: "numeric",
+      }),
       ...(dates.length ? { dates } : {}),
     };
 

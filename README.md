@@ -117,10 +117,15 @@ That makes the loop **greedy**. It follows an obvious path well. It cannot plan 
 and it cannot improvise when a site does something unexpected. Starting on an unrelated page it will
 search the web for the goal first, then carry on from the results.
 
-**Dates are worked out in code.** "Next week", "this weekend", "on friday", "march 3rd to 7th" become
-real days before Jev sees them, because reading dates as ordered quantities is one of its documented
-weak spots. It then picks that day off the calendar by matching the text — on a September 2026 picker,
-"next week" from a Sunday resolves to the 21st and gets clicked at 0.99 confidence.
+**Dates: Jev does most of this itself.** Measured on a September 2026 calendar, given only today's
+date, it picks the right day for "tomorrow" (1.00), "in three days" (0.97), "next friday" (0.97) and
+"the 25th" (1.00) — including real arithmetic — and correctly answers "none of these" for a date the
+calendar does not show. It does need `today`, which it cannot know, so that is always supplied.
+
+Code also works out the common phrases and passes them as a **hint**, not an instruction: 6/8 correct
+at 0.80 mean confidence unaided, 7/8 at 0.88 with the hint. The hint is explicitly overridable,
+because an earlier version that told Jev to defer to it turned a case it had right at 0.97 into a
+wrong answer when the code itself was buggy. Where the two disagree, the goal and `today` win.
 
 **Values are selected, never invented.** For a typing step, code enumerates every phrase in your goal
 and every value already on the page, and Jev picks which one belongs in the field. So "fill this in
