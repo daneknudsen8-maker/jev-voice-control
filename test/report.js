@@ -39,6 +39,8 @@ const EXPLAIN = {
   close_tab_policy:   ["tab closes always confirm", "policy in code — change in resolveCommand"],
   user_confirmed:     ["you approved it", null],
   user_cancelled:     ["you declined it", null],
+  page_unavailable:   ["couldn't reach the page", "usually a stale content script — reload the tab, or the extension if the manifest changed"],
+  no_page:            ["command needs a page, none open", "navigate somewhere first"],
   exception:          ["crashed", "see detail"],
 };
 

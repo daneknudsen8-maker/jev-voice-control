@@ -37,13 +37,37 @@ async function activeTab() {
   return tab;
 }
 
+/**
+ * Talk to the content script, injecting it first if the tab predates the
+ * extension. Throws PageUnavailable rather than a raw Chrome error, so callers
+ * can tell "this page is off limits" from a genuine bug.
+ */
+class PageUnavailable extends Error {
+  constructor(reason) { super(reason); this.name = "PageUnavailable"; }
+}
+
 async function talkToPage(tabId, message) {
   try {
-    return await chrome.tabs.sendMessage(tabId, message);
-  } catch {
-    // Content script not injected yet (or the page was just loaded).
+    const reply = await chrome.tabs.sendMessage(tabId, message);
+    if (reply !== undefined) return reply;
+  } catch { /* no content script yet — inject below */ }
+
+  try {
     await chrome.scripting.executeScript({ target: { tabId }, files: ["content.js"] });
-    return await chrome.tabs.sendMessage(tabId, message);
+  } catch (error) {
+    throw new PageUnavailable(
+      /permission/i.test(error.message)
+        ? "this extension isn't allowed on this page (reload the extension after a manifest change)"
+        : `can't reach this page: ${error.message}`,
+    );
+  }
+
+  try {
+    const reply = await chrome.tabs.sendMessage(tabId, message);
+    if (reply === undefined) throw new Error("no reply");
+    return reply;
+  } catch (error) {
+    throw new PageUnavailable(`page did not respond: ${error.message}`);
   }
 }
 
@@ -80,15 +104,19 @@ async function handleUtterance(transcript) {
   };
   const tabs = await openTabs(tab.id);
 
+  let pageProblem = null;
   if (readable) {
     try {
       inv = await talkToPage(tab.id, { type: "inventory", utterance: transcript });
     } catch (error) {
-      // Content script unavailable (page still loading, or CSP blocked it).
-      // Page-independent commands should still work.
-      console.warn("inventory failed, continuing without page:", error.message);
+      // Page off limits, still loading, or CSP-blocked. Commands that need no
+      // page content must still work, so carry on with an empty inventory.
+      pageProblem = error.message;
+      console.warn("inventory unavailable, continuing without page:", error.message);
     }
   }
+  // No usable page, whatever the reason.
+  const havePage = readable && !pageProblem;
 
   const state = {
     utterance: transcript,
@@ -106,7 +134,7 @@ async function handleUtterance(transcript) {
     elements: inv.elements,
     typeables: inv.typeables,
     tabs,
-    readable,
+    readable: havePage,
   });
 
   return {
@@ -115,6 +143,7 @@ async function handleUtterance(transcript) {
     usage: lastUsage,
     decision,
     page: inv.page,
+    pageProblem,
     // What Jev actually had to choose from — the first thing to check on a miss.
     candidates: {
       elements: inv.elements.map((e) => ({ id: e.id, text: e.text, kind: e.kind, where: e.where })),
@@ -189,10 +218,14 @@ async function run(command, tabId) {
       return { kind: "stop", message: "listening paused" };
 
     default: {
-      const result = await talkToPage(tabId, { type: "execute", command });
-      return result.ok
-        ? { kind: "done", message: result.did }
-        : { kind: "error", message: result.error };
+      try {
+        const result = await talkToPage(tabId, { type: "execute", command });
+        return result.ok
+          ? { kind: "done", message: result.did }
+          : { kind: "error", message: result.error };
+      } catch (error) {
+        return { kind: "error", message: error.message, why: "page_unavailable" };
+      }
     }
   }
 }
@@ -203,8 +236,8 @@ async function answerAboutPage(tab, question) {
   let sections, page;
   try {
     ({ sections, page } = await talkToPage(tab.id, { type: "sections" }));
-  } catch {
-    return { kind: "error", message: "I can't read this page — open a website first." };
+  } catch (error) {
+    return { kind: "error", message: `I can't read this page — ${error.message}`, why: "page_unavailable" };
   }
   if (!sections.length) return { kind: "error", message: "nothing readable on this page" };
 
@@ -240,7 +273,10 @@ async function answerAboutPage(tab, question) {
     return { kind: "answer", message: "I don't think this page answers that.", usage: lastUsage, answers };
   }
 
-  await talkToPage(tab.id, { type: "execute", command: { do: "highlight", id: best.choice } });
+  // Scrolling to the section is a nicety; never lose the answer over it.
+  try {
+    await talkToPage(tab.id, { type: "execute", command: { do: "highlight", id: best.choice } });
+  } catch { /* the answer below is still useful */ }
   const section = sections.find((s) => s.id === best.choice);
   return {
     kind: "answer",
