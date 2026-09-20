@@ -25,6 +25,16 @@
 
   <p id="heard" class="heard" aria-live="polite"></p>
 
+  <section id="task" class="task" hidden>
+    <div class="composer-head">
+      <span class="badge task-badge">task</span>
+      <span id="task-goal"></span>
+      <button id="task-stop" class="link">stop</button>
+    </div>
+    <ol id="task-steps" class="task-steps"></ol>
+    <p id="task-status" class="entry-hint"></p>
+  </section>
+
   <section id="mail" class="mail" hidden>
     <div class="composer-head">
       <span class="badge">email</span>

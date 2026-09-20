@@ -76,7 +76,8 @@ for (const testCase of cases) {
   // What did the resolver actually produce?
   const cmd = decision.command;
   let resolved, actual, cmdId;
-  if (decision.kind === "compose")        { resolved = `compose→${decision.fieldId}`; actual = "compose"; cmdId = decision.fieldId; }
+  if (decision.kind === "task")           { resolved = "task"; actual = "task"; }
+  else if (decision.kind === "compose")   { resolved = `compose→${decision.fieldId}`; actual = "compose"; cmdId = decision.fieldId; }
   else if (decision.kind === "ask_page")  { resolved = "ask_page"; actual = "ask_page"; }
   else if (decision.kind === "ignore")    { resolved = `ignore`; actual = "none"; }
   else if (decision.kind === "clarify")   { resolved = `clarify`; actual = "clarify"; }

@@ -100,3 +100,13 @@ body.dictating .mic[aria-pressed="true"] { background: var(--ok); }
 body.text-engine #command:not(:focus) { border-color: var(--warn); }
 .entry-hint { margin: 0; font-size: 11px; color: var(--muted); }
 body.text-engine .mic .dot { background: var(--ok); animation: none; }
+
+/* A running task: every step it took, in order. */
+.task { border: 2px solid var(--warn); border-radius: 10px; background: var(--card); padding: 10px 12px; }
+.task-badge { background: var(--warn); }
+#task-goal { font-size: 12px; color: var(--fg); font-weight: 600; }
+.task-steps { margin: 0 0 8px; padding-left: 22px; display: flex; flex-direction: column; gap: 3px; font-size: 13px; }
+.task-steps li { color: var(--muted); }
+.task-steps li.last { color: var(--fg); font-weight: 500; }
+.task-steps li.failed { color: var(--bad); }
+body.tasking .mic[aria-pressed="true"] { background: var(--warn); }

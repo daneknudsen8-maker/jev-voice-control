@@ -51,6 +51,7 @@ microphone.** Click *Start listening* (or press Space). Grant mic permission whe
 |---|---|
 | Moving | "scroll down", "back to the top", "go back", "reload the page" |
 | Chaining | "go to espn and click scores", "open gmail then search for invoices" |
+| Tasks | "find me an airbnb in austin for march 3rd to 7th", "fill out this form from that email" |
 | Clicking | "click the login button", "open the comments on the Rust story", "show me the guidelines" |
 | Typing | "type nice write-up in the comment box", "search this site for rust" |
 | Writing | "compose a new email" → "to …", "cc …", "the subject should be …", "the body should say …" |
@@ -100,6 +101,42 @@ spread across them is not real uncertainty, and an unambiguous target decides it
 **Bare names:** saying just "Loom" or "starred" reads as conversation and scores low on `is_command`, so
 it used to be dropped. It is now allowed, but only when the words **uniquely** match one open tab or one
 element on the page. Microphone noise matches nothing and is still dropped.
+
+## Giving it a task
+
+Say a goal rather than a command — "find me an airbnb in austin for march 3rd to 7th", "fill out this
+form using the details in that email" — and it works towards it a step at a time, showing each step as
+it goes.
+
+**How it works, and what that costs.** Jev is not an agent model: it does not plan, does not generate,
+and does not choose its own next action in any open-ended sense. So code owns the loop — counting
+steps, executing, waiting for pages, detecting repeats — and Jev answers one bounded question per
+turn: *given this goal and this page, what is the single next thing to do?*
+
+That makes the loop **greedy**. It follows an obvious path well. It cannot plan several moves ahead,
+and it cannot improvise when a site does something unexpected. Starting on an unrelated page it will
+search the web for the goal first, then carry on from the results.
+
+**Values are selected, never invented.** For a typing step, code enumerates every phrase in your goal
+and every value already on the page, and Jev picks which one belongs in the field. So "fill this in
+from that email" works, while "write a paragraph about X" does not — there is nothing to select from.
+
+**It stops for anything consequential.** Each step is scored 0–3 for how hard it is to undo, and
+anything at 1.5 or above waits for you — booking, paying, submitting, sending. You approve, and the
+loop carries on from there.
+
+| It stops when | |
+|---|---|
+| the goal is met | judged fresh each turn against the page |
+| it gets stuck | nothing on the page advances the goal |
+| a step repeats | the same click or entry twice means the last one did nothing |
+| 25 steps | hard limit, so a loop it does not understand cannot run away |
+| you say so | the stop button, any time |
+
+```sh
+cd test && node --env-file=../.env task-harness.js
+# 13/13 — telling a goal from a command, and picking the next step
+```
 
 ## Chained commands
 
@@ -305,6 +342,7 @@ extension/
   commands.js          ← the Jev question design. Start here.
   content.js           page element inventory + command execution
   panel.html/.js/.css  mic + transcript + activity log
+  task.js              the task loop: next-step judgment, value selection
   compose.js           structured email: field routing, spoken addresses
   dictation.js         writing mode: content vs command, punctuation, appending
   speech/index.js      transcript sources: webspeech.js (mic), textinput.js (Wispr Flow)
@@ -315,6 +353,7 @@ test/
   ordinal-harness.js   positional targeting over a realistic inbox
   newtab-harness.js    bookmark tiles on a new-tab page
   compose-harness.js   email field routing, scripted as conversations
+  task-harness.js      goal vs command, and next-step selection
   session.js           groups the trace into sessions; separates gaps from noise
 .claude/skills/
   voice-gaps/          the /voice-gaps command

@@ -27,6 +27,18 @@ export const KNOWN_SITES = {
 
 export const ACTIONS = {
   click: "Activate something on the page: a link, button, checkbox, menu item, or tab. Use for 'click', 'press', 'open', 'select', 'choose', 'tap', 'hit'.",
+  task: {
+    what: "Carry out a multi-step job on a site: several clicks and entries are needed to reach an end the user described, rather than one action.",
+    covers: [
+      "find me an airbnb in austin for march 3rd to 7th",
+      "fill out this form using the details in that email",
+      "book a table for two on friday",
+      "search for flights to denver and show me the cheapest",
+      "look through these results and tell me which is best",
+    ],
+    not_for: "A single click, scroll, tab change or navigation, however it is phrased.",
+    tell: "A task names an OUTCOME the user wants, usually with details attached — a place, dates, a source to copy from, or a judgment to make at the end. A command names one movement.",
+  },
   compose: "Begin dictating a longer piece of writing into a field on the page — an email, a message, a comment, a post. Use when the user wants to START writing and will speak the words after, e.g. 'write an email', 'compose a message', 'start dictating in the comment box', 'let me write a reply'. NOT for a short phrase the user already said in the same breath.",
   type: "Enter text into a field or text box ON THE CURRENT PAGE. Use for 'type ...', 'enter ...', 'write ...', 'put ... in the ... box', and for searching the current site when the user says so explicitly: 'search this site for ...', 'search the page for ...', 'search Amazon for ...'.",
   scroll: "Move the page up or down without activating anything.",
@@ -414,6 +426,9 @@ export function resolveCommand(answers, ctx) {
       const el = byId.get(target.choice);
       return confirmFor({ do: "click", id: target.choice }, el?.text ?? "that");
     }
+
+    case "task":
+      return { kind: "task", why: "ok", goal: transcript };
 
     case "compose": {
       const field = answers.field;

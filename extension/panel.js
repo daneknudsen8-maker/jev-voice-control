@@ -10,6 +10,7 @@ const prompt = $("prompt"), promptText = $("prompt-text"), promptActions = $("pr
 const composer = $("composer"), composerText = $("composer-text"), composerTarget = $("composer-target");
 const mail = $("mail"), mailFields = $("mail-fields");
 const engineSelect = $("engine"), entry = $("entry"), commandInput = $("command");
+const taskBox = $("task"), taskGoal = $("task-goal"), taskSteps = $("task-steps"), taskStatus = $("task-status");
 
 let listening = false;
 let busy = false;
@@ -110,6 +111,36 @@ function showMail(state) {
   setStatus(`writing · ${state.currentField ?? ""}`);
 }
 
+/** Show a task and everything it has done so far. */
+function showTask(task, status) {
+  if (!task) {
+    taskBox.hidden = true;
+    document.body.classList.remove("tasking");
+    taskSteps.replaceChildren();
+    return;
+  }
+  taskBox.hidden = false;
+  document.body.classList.toggle("tasking", Boolean(task.running));
+  taskGoal.textContent = task.goal ?? "";
+  taskSteps.replaceChildren();
+
+  (task.steps ?? []).forEach((step, i, all) => {
+    const li = document.createElement("li");
+    li.textContent = step.label;
+    if (!step.ok) li.className = "failed";
+    else if (i === all.length - 1) li.className = "last";
+    taskSteps.append(li);
+  });
+
+  const n = (task.steps ?? []).length;
+  taskStatus.textContent = status ?? (task.running ? `running · step ${n}` : `stopped after ${n} step${n === 1 ? "" : "s"}`);
+  setStatus(task.running ? "working" : (listening ? "listening" : "idle"));
+}
+
+$("task-stop").addEventListener("click", async () => {
+  render(await chrome.runtime.sendMessage({ type: "stop_task" }), "");
+});
+
 $("mail-stop").addEventListener("click", async () => {
   render(await chrome.runtime.sendMessage({ type: "end_dictation" }), "");
 });
@@ -200,6 +231,7 @@ function render(result, transcript) {
 
   if (result.dictation) showComposer(result.dictation);
   if (result.compose) showMail(result.compose);
+  if (result.task) showTask(result.task);
 
   const meta = debugLine(result);
 
@@ -215,6 +247,18 @@ function render(result, transcript) {
       }
       break;
     }
+
+    case "task":
+      add("done", `working on: ${result.goal ?? ""}`, meta, said);
+      break;
+
+    case "task_done":
+      add("done", result.message, meta, said);
+      break;
+
+    case "task_stopped":
+      add("clarify", result.message, meta, said);
+      break;
 
     case "composing":
       add("done", result.message, meta, said);
@@ -285,6 +329,8 @@ function debugLine(result) {
   const bits = [];
   if (a.is_content) bits.push(`content ${a.is_content.noul.toFixed(2)}`);
   if (a.field) bits.push(`field ${a.field.choice} ${a.field.confidence.toFixed(2)}`);
+  if (a.next_action) bits.push(`${a.next_action.choice} ${a.next_action.confidence.toFixed(2)}`);
+  if (a.goal_met) bits.push(`goal ${a.goal_met.noul.toFixed(2)}`);
   if (a.control) bits.push(`${a.control.choice} ${a.control.confidence.toFixed(2)}`);
   if (a.action) bits.push(`${a.action.choice} ${a.action.confidence.toFixed(2)}`);
   if (a.is_command) bits.push(`cmd ${a.is_command.noul.toFixed(2)}`);
@@ -323,6 +369,10 @@ addEventListener("keydown", (event) => {
   }
   if (event.code === "Escape" && listening) setListening(false);
 });
+
+chrome.runtime.sendMessage({ type: "task_state" }).then((r) => {
+  if (r?.task) showTask(r.task);
+}).catch(() => {});
 
 chrome.runtime.sendMessage({ type: "dictation_state" }).then((r) => {
   if (!r?.mode) return;

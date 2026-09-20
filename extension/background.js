@@ -4,6 +4,7 @@
 import { buildCommandQuestions, matchLocalCommand, matchTabNavigation, resolveCommand, splitSteps } from "./commands.js";
 import { appendChunk, buildDictationQuestions, resolveDictation } from "./dictation.js";
 import { buildComposeQuestions, REPLACES, resolveCompose, spokenEmail } from "./compose.js";
+import { buildTaskQuestions, MAX_STEPS, resolveTaskStep, valueCandidates } from "./task.js";
 import "./open-panel.js";
 
 const PROXY = "http://127.0.0.1:8787/systemone";
@@ -500,6 +501,122 @@ async function runSequence(steps, original) {
   };
 }
 
+/**
+ * Run a stated goal as a sequence of bounded steps, until it is met, the loop
+ * gets stuck, a step needs a person, or the step limit is reached.
+ *
+ * Each step is a fresh judgment against the page as it stands, because that is
+ * the only thing Jev can usefully answer. Nothing is planned ahead.
+ */
+async function runTask(goal, existing = null) {
+  const task = existing ?? { goal, steps: [], startedAt: Date.now() };
+  const done = (kind, message, extra = {}) => {
+    const result = { kind, message, task: { ...task, running: false }, ...extra };
+    return result;
+  };
+
+  while (task.steps.length < MAX_STEPS) {
+    const tab = await activeTab();
+    const readable = Boolean(tab.url) && !/^(chrome|edge|about|chrome-extension|devtools|view-source|file):/.test(tab.url);
+    if (!readable) {
+      await setTask(null);
+      return done("task_stopped", "I can't read this page, so I stopped.", { why: "no_page" });
+    }
+
+    let inv;
+    try {
+      inv = await talkToPage(tab.id, { type: "inventory", utterance: goal });
+    } catch (error) {
+      await setTask(null);
+      return done("task_stopped", `Lost the page: ${error.message}`, { why: "page_unavailable" });
+    }
+
+    // Values are enumerated by code; Jev only selects among them.
+    const pageValues = inv.typeables.map((t) => t.text).filter(Boolean);
+    const values = valueCandidates(goal, pageValues);
+
+    const state = {
+      goal,
+      step_number: task.steps.length + 1,
+      page: inv.page,
+      elements: inv.elements,
+      typeables: inv.typeables,
+      history: task.steps.map((s) => s.label),
+    };
+
+    const answers = await askJev(state, buildTaskQuestions({
+      elements: inv.elements, typeables: inv.typeables, values,
+    }));
+
+    const step = resolveTaskStep(answers, {
+      values, history: task.steps, elements: inv.elements, typeables: inv.typeables, goal,
+    });
+
+    if (step.do === "done") {
+      await setTask(null);
+      return done("task_done", `Done — ${goal}`, { why: step.why, detail: step.detail, answers, usage: lastUsage });
+    }
+    if (step.do === "stuck") {
+      await setTask({ ...task, running: false });
+      return done("task_stopped", `Stopped: ${step.detail}`, { why: step.why, answers, usage: lastUsage });
+    }
+    if (step.do === "ask") {
+      // A consequential step. Hold the task and wait for a person.
+      await setTask({ ...task, running: false, pendingStep: step });
+      await setPending({ command: step.command, tabId: tab.id, utterance: goal, task: true });
+      return {
+        kind: "confirm",
+        message: `${step.label}?
+
+This can't easily be undone (risk ${step.risk.toFixed(1)}).`,
+        task: { ...task, running: false },
+        why: step.why, answers, usage: lastUsage,
+      };
+    }
+
+    // Ordinary step: do it.
+    const before = tab.url;
+    const result = await runStepCommand(step.command, tab.id);
+    task.steps.push({ label: step.label, command: step.command, ok: result.ok, at: Date.now() });
+    await setTask({ ...task, running: true });
+
+    if (!result.ok) {
+      await setTask({ ...task, running: false });
+      return done("task_stopped", `Step failed: ${result.error}`, { why: "step_failed", answers, usage: lastUsage });
+    }
+
+    await settle(tab.id, before);
+  }
+
+  await setTask({ ...task, running: false });
+  return done("task_stopped", `Stopped after ${MAX_STEPS} steps without finishing.`, { why: "step_limit" });
+}
+
+/** Execute one task step, whether it belongs to the page or the browser. */
+async function runStepCommand(command, tabId) {
+  if (command.do === "navigate") {
+    await chrome.tabs.update(tabId, { url: command.url });
+    return { ok: true };
+  }
+  if (command.do === "history") {
+    try {
+      await chrome.tabs.goBack(tabId);
+      return { ok: true };
+    } catch { return { ok: false, error: "nothing to go back to" }; }
+  }
+  return await talkToPage(tabId, { type: "execute", command })
+    .catch((error) => ({ ok: false, error: error.message }));
+}
+
+/** Give the page a chance to react, and wait properly if it navigated. */
+async function settle(tabId, urlBefore) {
+  await new Promise((r) => setTimeout(r, 400));
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    if (tab.url !== urlBefore || tab.status === "loading") await waitForTabLoad(tabId);
+  } catch { /* tab closed */ }
+}
+
 async function carryOut(decision, tab, transcript) {
   switch (decision.kind) {
     case "ignore":
@@ -565,6 +682,9 @@ async function beginWriting(tabId, seedId) {
       return await beginWriting(tab.id, undefined);
     }
 
+    case "task":
+      return await runTask(decision.goal);
+
     case "compose":
       return await beginWriting(tab.id, decision.fieldId);
 
@@ -580,6 +700,15 @@ async function beginWriting(tabId, seedId) {
 // after ~30s idle. A module variable would be gone by the time you answered.
 const PENDING_KEY = "pendingConfirmation";
 const MODE_KEY = "dictationMode";
+const TASK_KEY = "runningTask";
+
+async function getTask() {
+  return (await chrome.storage.session.get(TASK_KEY))[TASK_KEY] ?? null;
+}
+async function setTask(value) {
+  if (value) await chrome.storage.session.set({ [TASK_KEY]: value });
+  else await chrome.storage.session.remove(TASK_KEY);
+}
 
 async function getMode() {
   return (await chrome.storage.session.get(MODE_KEY))[MODE_KEY] ?? null;
@@ -791,6 +920,24 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
         let outcome;
         if (!msg.yes) {
           outcome = { kind: "ignored", message: "cancelled by user" };
+        } else if (pending.task) {
+          const task = await getTask();
+          if (!msg.yes) {
+            await setTask(null);
+            outcome = { kind: "task_stopped", message: "Task cancelled.", task: { ...(task ?? {}), running: false } };
+          } else {
+            const step = task?.pendingStep;
+            const r = await runStepCommand(command, tabId);
+            if (!r.ok) {
+              await setTask(null);
+              outcome = { kind: "task_stopped", message: `Step failed: ${r.error}` };
+            } else {
+              const steps = [...(task?.steps ?? []), { label: step?.label ?? "confirmed step", command, ok: true, at: Date.now() }];
+              await settle(tabId, undefined);
+              // Continue the loop from where it paused.
+              outcome = await runTask(task?.goal ?? pending.utterance, { goal: task?.goal ?? pending.utterance, steps, startedAt: task?.startedAt ?? Date.now() });
+            }
+          }
         } else if (pending.compose) {
           const cmd = command.do === "clear_composer"
             ? { do: "write_field", role: (await getMode())?.currentField ?? "body", text: "" }
@@ -818,6 +965,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
           command,
         });
         respond(outcome);
+      } else if (msg.type === "task_state") {
+        respond({ task: await getTask() });
+      } else if (msg.type === "stop_task") {
+        const task = await getTask();
+        await setTask(null);
+        respond({ kind: "task_stopped", message: "Stopped.", task: { ...(task ?? {}), running: false } });
       } else if (msg.type === "dictation_state") {
         respond({ mode: await getMode() });
       } else if (msg.type === "end_dictation") {

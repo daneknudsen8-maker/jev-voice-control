@@ -70,7 +70,7 @@ export const CASES = [
   { say: "go to github.com",                         expect: "navigate", url: "https://github.com" },
   { say: "take me to arstechnica dot com",           expect: "navigate", url: "https://arstechnica.com" },
   // Descriptions must still search rather than guess a domain.
-  { say: "find flights to denver",                   expect: "navigate", search: true },
+  { say: "find flights to denver",                   expect: "task" },  // an outcome with details, not one movement
   { say: "google the best mechanical keyboards",     expect: "navigate", search: true },
   // Bare "search for X" = the web. Naming the site = the page's own box.
   { say: "search for the best mechanical keyboards", expect: "navigate", search: true },
