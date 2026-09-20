@@ -267,6 +267,21 @@ const DANGER = /\b(delete|remove|deactivate|close account|cancel (subscription|p
  */
 export function resolveCommand(answers, ctx) {
   const { transcript, elements, typeables, tabs } = ctx;
+  const byId = new Map([...elements, ...typeables].map((el) => [el.id, el]));
+
+  /**
+   * The thing they named may be on the page rather than in a tab or a URL —
+   * a bookmark tile, a shortcut, a link. "go to CMC email" on a new-tab page
+   * means the tile called CMC email. Falls back to the target answer, which is
+   * already asked in every request.
+   */
+  const onPage = (floor = FLOORS.target) => {
+    const t = answers.target;
+    if (!t || t.choice === "no_match" || t.confidence < floor) return null;
+    const el = byId.get(t.choice);
+    return el ? { id: t.choice, el, confidence: t.confidence } : null;
+  };
+
   const action = answers.action;
   const isCommand = answers.is_command?.noul ?? 1;
   const risk = answers.risk?.score ?? 0;
@@ -307,10 +322,20 @@ export function resolveCommand(answers, ctx) {
     return { kind: "ignore", why: "action_none", detail: `Jev read this as not a browser action (conf ${action.confidence.toFixed(2)})` };
   }
   if (action.confidence < FLOORS.action) {
+    // click, switch_tab and navigate all mean "open this thing", so probability
+    // spread across them is not real uncertainty about intent. "go to CMC
+    // email" on a page of tiles splits 0.37 three ways while the tile itself
+    // scores 1.00. An unambiguous target settles it.
+    const openish = ["click", "switch_tab", "navigate"];
+    const openShare = openish.reduce((sum, k) => sum + (action.probabilities?.[k] ?? 0), 0);
+    const here = onPage(0.85);
+    if (here && openShare >= 0.7) {
+      return { kind: "execute", command: { do: "click", id: here.id }, why: "named_on_page",
+               detail: `action split ${action.confidence.toFixed(2)} across open-ish actions (${openShare.toFixed(2)}); target "${here.el.text}" ${here.confidence.toFixed(2)}` };
+    }
     return { kind: "clarify", why: "action_unclear", say: "I didn't catch that — could you say it again?", detail: `action=${action.choice} conf ${action.confidence.toFixed(2)} < ${FLOORS.action}` };
   }
 
-  const byId = new Map([...elements, ...typeables].map((el) => [el.id, el]));
   const confirmFor = (cmd, label) => {
     const byRisk = risk >= CONFIRM_RISK;
     const byWord = DANGER.test(label ?? "");
@@ -394,10 +419,26 @@ export function resolveCommand(answers, ctx) {
         return { kind: "execute", command: { do: "navigate", url: spoken }, risk, why: "ok_spoken_domain" };
       }
 
-      // 2. A site we know by name.
+      // 2. A bookmark or tile on the page that clearly matches. Someone's own
+      //    shortcut is more specific than a generic domain — a tile called
+      //    "Gcal" may point at a particular calendar, not calendar.google.com.
+      const strongHere = onPage(0.85);
+      if (strongHere) {
+        return { kind: "execute", command: { do: "click", id: strongHere.id }, why: "named_on_page",
+                 detail: `clicked "${strongHere.el.text}" on the page (${strongHere.confidence.toFixed(2)}) rather than guessing a URL` };
+      }
+
+      // 3. A site we know by name.
       const dest = answers.destination;
       if (dest && dest.choice !== "web_search" && dest.confidence >= FLOORS.destination) {
         return { kind: "execute", command: { do: "navigate", url: KNOWN_SITES[dest.choice] }, risk, why: "ok" };
+      }
+
+      // Before falling back to a web search, a weaker page match will still do.
+      const here = onPage(0.6);
+      if (here) {
+        return { kind: "execute", command: { do: "click", id: here.id }, why: "named_on_page",
+                 detail: `not a known site; clicked "${here.el.text}" on the page (${here.confidence.toFixed(2)})` };
       }
 
       const query = extractSearchQuery(transcript);
@@ -431,11 +472,36 @@ export function resolveCommand(answers, ctx) {
       // answer on a close as meaning the tab in front of you.
       const target = (!t || t.choice === "no_match") ? "current" : t.choice;
 
-      if (!closing && target === "current") {
-        return { kind: "clarify", why: "tab_no_match", say: "Which tab?", detail: "no matching tab to switch to" };
+      // "go to CMC email" on a page of bookmark tiles splits the action almost
+      // evenly between click and switch_tab, and which one wins varies run to
+      // run. The targets do not: the tile scores 1.00 while the nearest tab
+      // scores 0.27. When the page match is overwhelmingly stronger, trust it
+      // rather than the coin flip above it.
+      if (!closing) {
+        const here = onPage(0.8);
+        const tabConfidence = t && t.choice !== "no_match" ? t.confidence : 0;
+        if (here && here.confidence > tabConfidence + 0.3) {
+          return { kind: "execute", command: { do: "click", id: here.id }, why: "named_on_page",
+                   detail: `page "${here.el.text}" ${here.confidence.toFixed(2)} beat tab ${tabConfidence.toFixed(2)}` };
+        }
       }
-      if (target !== "current" && t && t.confidence < FLOORS.tab) {
-        return { kind: "clarify", why: "tab_ambiguous", say: "Which tab did you mean?", detail: `tab conf ${t.confidence.toFixed(2)} < ${FLOORS.tab}` };
+
+      const tabUnresolved = (!closing && target === "current")
+        || (target !== "current" && t && t.confidence < FLOORS.tab);
+
+      if (tabUnresolved && !closing) {
+        // No tab matched, but they may have named something on the page.
+        const here = onPage();
+        if (here) {
+          return { kind: "execute", command: { do: "click", id: here.id }, why: "named_on_page",
+                   detail: `no matching tab; clicked "${here.el.text}" on the page (${here.confidence.toFixed(2)})` };
+        }
+        return t && t.confidence < FLOORS.tab && target !== "current"
+          ? { kind: "clarify", why: "tab_ambiguous", say: "Which tab did you mean?", detail: `tab conf ${t.confidence.toFixed(2)} < ${FLOORS.tab}` }
+          : { kind: "clarify", why: "tab_no_match", say: "Which tab?", detail: "no matching tab and nothing on the page matched" };
+      }
+      if (tabUnresolved && closing) {
+        return { kind: "clarify", why: "tab_ambiguous", say: "Which tab did you mean?", detail: `tab conf ${t?.confidence?.toFixed(2)} < ${FLOORS.tab}` };
       }
 
       if (!closing) {

@@ -75,6 +75,12 @@ candidate list, since position is about where things sit, not how well their tex
 **Tab position** — "next tab", "go left two tabs", "switch back" — is arithmetic, so code handles it
 entirely. No model call, and "switch back" uses a real last-used-tab history.
 
+**Things on the page win.** "go to CMC email" on a page of bookmark tiles means the tile. Naming
+something visible resolves to clicking it, ahead of switching to a loosely-matching tab or guessing a
+URL — a shortcut you put there yourself is more specific than a generic domain. This also settles
+genuinely split actions: click, switch_tab and navigate all mean "open this thing", so probability
+spread across them is not real uncertainty, and an unambiguous target decides it.
+
 **Bare names:** saying just "Loom" or "starred" reads as conversation and scores low on `is_command`, so
 it used to be dropped. It is now allowed, but only when the words **uniquely** match one open tab or one
 element on the page. Microphone noise matches nothing and is still dropped.
@@ -291,6 +297,7 @@ test/
   dictation-harness.js mode-confusion tests; fails loudly on dangerous misses
   multistep-harness.js chained commands vs single actions containing "and"
   ordinal-harness.js   positional targeting over a realistic inbox
+  newtab-harness.js    bookmark tiles on a new-tab page
   compose-harness.js   email field routing, scripted as conversations
   session.js           groups the trace into sessions; separates gaps from noise
 .claude/skills/
