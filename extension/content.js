@@ -282,13 +282,8 @@ function execute(command) {
       return { ok: true, did: "highlighted" };
     }
 
-    case "history":
-      history.go(command.delta);
-      return { ok: true, did: command.delta < 0 ? "went back" : "went forward" };
-
-    case "reload":
-      location.reload();
-      return { ok: true, did: "reloading" };
+    // reload / back / forward deliberately live in background.js: doing them
+    // here destroys this script before it can reply.
 
     default:
       return { ok: false, error: `content script cannot do "${command.do}"` };

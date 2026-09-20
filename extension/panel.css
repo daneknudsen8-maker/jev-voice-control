@@ -64,3 +64,13 @@ footer { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wr
 .composer-hint { margin: 8px 0 0; font-size: 11px; color: var(--muted); line-height: 1.5; }
 .composer-hint b { color: var(--fg); font-weight: 600; }
 body.dictating .mic[aria-pressed="true"] { background: var(--ok); }
+
+/* What you said leads each entry — usually the first thing to check. */
+.log li { display: flex; flex-direction: column; gap: 2px; position: relative; padding-right: 58px; }
+.said { font-weight: 600; color: var(--fg); }
+.said::before { content: "“"; opacity: .45; }
+.said::after  { content: "”"; opacity: .45; }
+.result { color: var(--muted); }
+.log li.done .result { color: var(--fg); }
+.time { position: absolute; top: 7px; right: 9px; font-size: 10px; color: var(--muted);
+        font-variant-numeric: tabular-nums; opacity: .7; }

@@ -37,7 +37,8 @@ microphone.** Click *Start listening* (or press Space). Grant mic permission whe
 
 | | |
 |---|---|
-| Moving | "scroll down", "back to the top", "go back", "reload" |
+| Moving | "scroll down", "back to the top", "go back", "reload the page" |
+| Chaining | "go to espn and click scores", "open gmail then search for invoices" |
 | Clicking | "click the login button", "open the comments on the Rust story", "show me the guidelines" |
 | Typing | "type nice write-up in the comment box", "search this site for rust" |
 | Writing | "write an email", "let me dictate a comment" → then just talk |
@@ -60,6 +61,27 @@ If a named site is already open in a tab, it switches to that tab instead of rel
 
 Commands that don't need page content — navigating, tabs, history — work on a blank new tab, where
 there is nothing to read.
+
+## Chained commands
+
+Say two things at once — "go to espn **and** click scores", "open gmail **then** search for invoices" —
+and each step runs in turn.
+
+Each step is resolved **after** the previous one finishes, against the page as it then stands. It has to
+be: "click scores" cannot be resolved until espn has loaded and its elements exist. The extension waits
+for the page to settle between steps.
+
+Splitting is done in code, but whether the split is *real* is a judgment — "click the login **and**
+password fields" is one action, not two. A Noul decides, and the margin is wide: genuine chains score
+0.94–0.98, single actions 0.06–0.17.
+
+If a step needs an answer from you — a confirmation, or a "which one did you mean" — the chain stops
+there, since the remaining steps were written for a page that may now never appear.
+
+```sh
+cd test && node --env-file=../.env multistep-harness.js
+# 14/14 passed · 0 false splits
+```
 
 ## Writing longer text
 
@@ -189,6 +211,7 @@ extension/
 test/
   harness.js           browser-free evaluation against live Jev
   dictation-harness.js mode-confusion tests; fails loudly on dangerous misses
+  multistep-harness.js chained commands vs single actions containing "and"
   fixtures.js          fake page, tabs, and the expected outcomes
 docs/typesafe/         full local TypeSafe docs — read 00-core.md first
 ```

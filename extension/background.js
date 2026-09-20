@@ -1,7 +1,7 @@
 // Orchestrator. Owns tab operations and all traffic to the proxy.
 // The panel sends transcripts here; this decides what happens.
 
-import { buildCommandQuestions, matchLocalCommand, resolveCommand } from "./commands.js";
+import { buildCommandQuestions, matchLocalCommand, resolveCommand, splitSteps } from "./commands.js";
 import { appendChunk, buildDictationQuestions, resolveDictation } from "./dictation.js";
 import "./open-panel.js";
 
@@ -30,6 +30,24 @@ async function askJev(state, questions) {
   const json = await res.json();
   lastUsage = { ...json.usage, ms: Math.round(performance.now() - started), model: json.model };
   return json.answers;
+}
+
+/** Resolve once the tab has finished loading, or after a ceiling. */
+function waitForTabLoad(tabId, timeoutMs = 10_000) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      chrome.tabs.onUpdated.removeListener(onUpdate);
+      clearTimeout(timer);
+      // A moment more for scripts to paint the interactive elements.
+      setTimeout(resolve, 350);
+    };
+    const onUpdate = (id, info) => { if (id === tabId && info.status === "complete") finish(); };
+    const timer = setTimeout(finish, timeoutMs);
+    chrome.tabs.onUpdated.addListener(onUpdate);
+  });
 }
 
 async function activeTab() {
@@ -131,8 +149,15 @@ async function handleUtterance(transcript) {
     open_tabs: tabs,
   };
 
-  const questions = buildCommandQuestions({ elements: inv.elements, tabs, typeables: inv.typeables });
+  // A chained command is split in code; the multi_step Noul decides whether the
+  // split is real. Asked in the same request, so a single command costs nothing.
+  const steps = splitSteps(transcript);
+  const questions = buildCommandQuestions({ elements: inv.elements, tabs, typeables: inv.typeables, steps });
   const answers = await askJev(state, questions);
+
+  if (steps.length > 1 && (answers.multi_step?.noul ?? 0) >= 0.6) {
+    return await runSequence(steps, transcript);
+  }
 
   const decision = resolveCommand(answers, {
     transcript,
@@ -238,6 +263,53 @@ async function handleDictation(transcript, mode) {
   }
 }
 
+/**
+ * Carry out a chained command one step at a time. Each step is resolved fresh
+ * against the page as it stands after the previous one, because "go to espn and
+ * click scores" cannot resolve "scores" until espn has loaded.
+ */
+async function runSequence(steps, original) {
+  const results = [];
+
+  for (const [index, step] of steps.entries()) {
+    const before = await activeTab();
+    const beforeUrl = before.url;
+
+    let result;
+    try {
+      result = await handleUtterance(step);
+    } catch (error) {
+      results.push({ step, kind: "error", message: error.message });
+      break;
+    }
+    results.push({ step, ...result });
+
+    // Anything needing an answer from you ends the chain: the remaining steps
+    // were written for a page that may now never appear.
+    if (["confirm", "choose", "clarify", "error"].includes(result.kind)) {
+      results.push({ step: null, kind: "ignored", message: `stopped after step ${index + 1} of ${steps.length}` });
+      break;
+    }
+
+    if (index < steps.length - 1) {
+      const after = await activeTab();
+      if (after.url !== beforeUrl || result.message?.startsWith?.("going to")) {
+        await waitForTabLoad(after.id);
+      } else {
+        await new Promise((r) => setTimeout(r, 250));  // let the page react
+      }
+    }
+  }
+
+  const ran = results.filter((r) => r.kind === "done" || r.kind === "answer" || r.kind === "wrote").length;
+  return {
+    kind: "sequence",
+    steps: results,
+    message: `${ran} of ${steps.length} steps`,
+    utterance: original,
+  };
+}
+
 async function carryOut(decision, tab, transcript) {
   switch (decision.kind) {
     case "ignore":
@@ -334,6 +406,24 @@ async function run(command, tabId) {
     case "stop_listening":
       return { kind: "stop", message: "listening paused" };
 
+    // These tear down the content script as they run, so asking the page to do
+    // them means the reply never arrives and a working command looks broken.
+    // Chrome's own tab APIs do not have that problem, and they also work on
+    // pages where no content script can run.
+    case "reload":
+      await chrome.tabs.reload(tabId);
+      return { kind: "done", message: "reloading" };
+
+    case "history": {
+      try {
+        if (command.delta < 0) await chrome.tabs.goBack(tabId);
+        else await chrome.tabs.goForward(tabId);
+      } catch {
+        return { kind: "error", message: command.delta < 0 ? "nothing to go back to" : "nothing to go forward to" };
+      }
+      return { kind: "done", message: command.delta < 0 ? "went back" : "went forward" };
+    }
+
     default: {
       try {
         const result = await talkToPage(tabId, { type: "execute", command });
@@ -424,9 +514,23 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
           });
           throw error;
         }
+        if (result.kind === "sequence") {
+          for (const step of result.steps) {
+            if (!step.step) continue;
+            await record({
+              utterance: `${msg.transcript}  ‹step: ${step.step}›`,
+              executed: ["done", "answer", "wrote"].includes(step.kind),
+              outcome: step.kind,
+              why: step.decision?.why ?? step.why ?? null,
+              detail: step.decision?.detail ?? step.message ?? null,
+              answers: step.answers ?? null,
+            });
+          }
+        }
         await record({
           utterance: msg.transcript,
-          executed: result.kind === "done" || result.kind === "answer" || result.kind === "stop",
+          executed: result.kind === "done" || result.kind === "answer" || result.kind === "stop"
+                 || (result.kind === "sequence" && result.steps.every((x) => !x.step || ["done","answer","wrote"].includes(x.kind))),
           outcome: result.kind,
           why: result.decision?.why ?? (result.local ? "local_command" : result.why ?? null),
           detail: result.decision?.detail ?? result.message ?? null,

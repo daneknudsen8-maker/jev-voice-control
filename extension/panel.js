@@ -11,6 +11,7 @@ const composer = $("composer"), composerText = $("composer-text"), composerTarge
 
 let listening = false;
 let busy = false;
+let lastSaid = "";
 
 const recognizer = createRecognizer({
   onListening: () => setStatus("listening"),
@@ -46,18 +47,41 @@ $("composer-stop").addEventListener("click", async () => {
   render(await chrome.runtime.sendMessage({ type: "end_dictation" }), "");
 });
 
-function add(kind, message, meta) {
+/**
+ * One line per query. What you said comes first, because that is what you check
+ * when something goes wrong — the transcript is often the culprit, not the model.
+ */
+function add(kind, message, meta, said) {
   const li = document.createElement("li");
   li.className = kind;
-  li.textContent = message;
+
+  if (said) {
+    const q = document.createElement("span");
+    q.className = "said";
+    q.textContent = said;
+    li.append(q);
+  }
+
+  const body = document.createElement("span");
+  body.className = "result";
+  body.textContent = message;
+  li.append(body);
+
   if (meta) {
     const span = document.createElement("span");
     span.className = "meta";
     span.textContent = meta;
     li.append(span);
   }
+
+  const time = document.createElement("span");
+  time.className = "time";
+  time.textContent = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  li.append(time);
+
   log.prepend(li);
-  while (log.children.length > 40) log.lastElementChild.remove();
+  while (log.children.length > 60) log.lastElementChild.remove();
+  return li;
 }
 
 function clearPrompt() {
@@ -84,6 +108,7 @@ async function submit(transcript) {
   setStatus("thinking");
   clearPrompt();
   try {
+    lastSaid = transcript;
     render(await chrome.runtime.sendMessage({ type: "utterance", transcript }), transcript);
   } catch (error) {
     add("error", error.message);
@@ -94,7 +119,8 @@ async function submit(transcript) {
 }
 
 function render(result, transcript) {
-  if (!result) return add("error", "no response from the extension");
+  const said = transcript || lastSaid;
+  if (!result) return add("error", "no response from the extension", undefined, said);
 
   if (result.usage) {
     const { input_tokens, ms, model } = result.usage;
@@ -106,29 +132,41 @@ function render(result, transcript) {
   const meta = debugLine(result);
 
   switch (result.kind) {
+    case "sequence": {
+      // One line per step, oldest first, so the chain reads top to bottom.
+      add("done", result.message, meta, said);
+      for (const step of result.steps) {
+        if (!step.step) { add("ignored", step.message); continue; }
+        const kind = step.kind === "done" || step.kind === "answer" || step.kind === "wrote" ? "done"
+                   : step.kind === "error" ? "error" : "clarify";
+        add(kind, step.message ?? step.kind, debugLine(step), `↳ ${step.step}`);
+      }
+      break;
+    }
+
     case "composing":
-      add("done", result.message, meta);
+      add("done", result.message, meta, said);
       break;
 
     case "wrote":
       composerText.textContent = result.message;
       composerText.scrollTop = composerText.scrollHeight;
-      add("done", `wrote: ${String(result.message).split("\n").pop().slice(-60)}`, meta);
+      add("done", `wrote: ${String(result.message).split("\n").pop().slice(-60)}`, meta, said);
       break;
 
     case "done":
-      add("done", result.message, meta);
+      add("done", result.message, meta, said);
       break;
 
     case "answer":
       add("done", result.message,
         result.certainty != null
           ? `answered ${result.certainty.toFixed(2)} · match ${result.confidence?.toFixed(2)} · ${meta ?? ""}`
-          : meta);
+          : meta, said);
       break;
 
     case "confirm":
-      add("confirm", result.message, meta);
+      add("confirm", result.message, meta, said);
       askUser(result.message, [
         ["Yes, do it", () => send({ type: "confirm", yes: true }), true],
         ["Cancel", () => send({ type: "confirm", yes: false })],
@@ -136,7 +174,7 @@ function render(result, transcript) {
       break;
 
     case "choose":
-      add("choose", result.message, meta);
+      add("choose", result.message, meta, said);
       askUser(result.message, [
         ...result.options.map((o) => [`${o.text}`.slice(0, 40), () => send({ type: "pick", id: o.id })]),
         ["None of these", () => {}],
@@ -144,11 +182,11 @@ function render(result, transcript) {
       break;
 
     case "clarify":
-      add("clarify", result.message, meta);
+      add("clarify", result.message, meta, said);
       break;
 
     case "ignored":
-      add("ignored", `— ${transcript}`, result.message);
+      add("ignored", result.message ?? "not a command", meta, said);
       break;
 
     case "stop":
@@ -157,7 +195,7 @@ function render(result, transcript) {
       break;
 
     default:
-      add("error", result.message ?? `unexpected: ${result.kind}`);
+      add("error", result.message ?? `unexpected: ${result.kind}`, meta, said);
   }
 }
 

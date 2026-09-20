@@ -46,7 +46,20 @@ export const ACTIONS = {
  * One request carrying every question the command might need (speculative fan-out).
  * Irrelevant answers are simply not read — see resolveCommand.
  */
-export function buildCommandQuestions({ elements, tabs, typeables }) {
+/**
+ * Candidate split of a chained command. Code does the splitting because it is
+ * string work; a Noul decides whether the split is real, since "click the login
+ * and password fields" is one action and "go to espn and click scores" is two.
+ */
+export function splitSteps(transcript) {
+  const parts = transcript
+    .split(/\s*,?\s+(?:and\s+then|then|and)\s+/gi)
+    .map((p) => p.trim())
+    .filter(Boolean);
+  return parts.length > 1 ? parts : [transcript.trim()];
+}
+
+export function buildCommandQuestions({ elements, tabs, typeables, steps }) {
   const questions = {
     action: {
       type: "choice",
@@ -105,6 +118,20 @@ export function buildCommandQuestions({ elements, tabs, typeables }) {
         false: "Describes a topic, question, or thing to look up, such as 'find flights to denver' or 'search for rust async'",
       },
     },
+
+    ...(steps && steps.length > 1 ? {
+      multi_step: {
+        type: "noul",
+        instructions: {
+          question: "Does `utterance` ask for two or more separate browser actions to be carried out one after another?",
+          focus: `Compare against this proposed split: ${JSON.stringify(steps)}. Answer yes only if each part is an action in its own right.`,
+        },
+        criteria: {
+          true: "Two or more distinct actions in sequence, e.g. 'go to espn and click scores', 'open gmail then search for invoices'",
+          false: "One single action, even when it names several things joined by 'and', e.g. 'click the login and password fields', 'search for cats and dogs'",
+        },
+      },
+    } : {}),
 
     destination: {
       type: "choice",
