@@ -74,3 +74,14 @@ body.dictating .mic[aria-pressed="true"] { background: var(--ok); }
 .log li.done .result { color: var(--fg); }
 .time { position: absolute; top: 7px; right: 9px; font-size: 10px; color: var(--muted);
         font-variant-numeric: tabular-nums; opacity: .7; }
+
+/* A structured message: each field visible, the active one marked. */
+.mail { border: 2px solid var(--accent); border-radius: 10px; background: var(--card); padding: 10px 12px; }
+.mail-fields { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 6px 10px; align-items: baseline; }
+.mail-fields dt { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.mail-fields dd { margin: 0; white-space: pre-wrap; word-break: break-word; }
+.mail-fields dd:empty::before { content: "—"; color: var(--muted); opacity: .5; }
+.mail-fields .active dt, .mail-fields dt.active { color: var(--accent); }
+.mail-fields dd.active { box-shadow: inset 2px 0 0 var(--accent); padding-left: 7px; }
+.mail-fields dd.body { max-height: 160px; overflow-y: auto; }
+#mail-hint { font-size: 11px; color: var(--muted); }

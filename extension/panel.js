@@ -8,6 +8,7 @@ const toggle = $("toggle"), label = $("toggle-label"), status = $("status");
 const heard = $("heard"), log = $("log"), usage = $("usage");
 const prompt = $("prompt"), promptText = $("prompt-text"), promptActions = $("prompt-actions");
 const composer = $("composer"), composerText = $("composer-text"), composerTarget = $("composer-target");
+const mail = $("mail"), mailFields = $("mail-fields");
 
 let listening = false;
 let busy = false;
@@ -42,6 +43,35 @@ function showComposer(state) {
     setStatus(listening ? "listening" : "idle");
   }
 }
+
+/** Render the email as it is being filled in, marking the active field. */
+function showMail(state) {
+  if (!state?.active) {
+    mail.hidden = true;
+    document.body.classList.remove("dictating");
+    mailFields.replaceChildren();
+    setStatus(listening ? "listening" : "idle");
+    return;
+  }
+  mail.hidden = false;
+  document.body.classList.add("dictating");
+  mailFields.replaceChildren();
+
+  for (const role of state.fields ?? []) {
+    const dt = document.createElement("dt");
+    dt.textContent = role;
+    const dd = document.createElement("dd");
+    dd.textContent = state.text?.[role] ?? "";
+    dd.className = role === "body" ? "body" : "";
+    if (role === state.currentField) { dt.classList.add("active"); dd.classList.add("active"); }
+    mailFields.append(dt, dd);
+  }
+  setStatus(`writing · ${state.currentField ?? ""}`);
+}
+
+$("mail-stop").addEventListener("click", async () => {
+  render(await chrome.runtime.sendMessage({ type: "end_dictation" }), "");
+});
 
 $("composer-stop").addEventListener("click", async () => {
   render(await chrome.runtime.sendMessage({ type: "end_dictation" }), "");
@@ -128,6 +158,7 @@ function render(result, transcript) {
   }
 
   if (result.dictation) showComposer(result.dictation);
+  if (result.compose) showMail(result.compose);
 
   const meta = debugLine(result);
 
@@ -145,6 +176,14 @@ function render(result, transcript) {
     }
 
     case "composing":
+      add("done", result.message, meta, said);
+      break;
+
+    case "field":
+      add("clarify", result.message, meta, said);
+      break;
+
+    case "field_written":
       add("done", result.message, meta, said);
       break;
 
@@ -204,6 +243,7 @@ function debugLine(result) {
   if (!a) return result.detail ?? result.debug ?? undefined;
   const bits = [];
   if (a.is_content) bits.push(`content ${a.is_content.noul.toFixed(2)}`);
+  if (a.field) bits.push(`field ${a.field.choice} ${a.field.confidence.toFixed(2)}`);
   if (a.control) bits.push(`${a.control.choice} ${a.control.confidence.toFixed(2)}`);
   if (a.action) bits.push(`${a.action.choice} ${a.action.confidence.toFixed(2)}`);
   if (a.is_command) bits.push(`cmd ${a.is_command.noul.toFixed(2)}`);
@@ -241,7 +281,12 @@ addEventListener("keydown", (event) => {
 });
 
 chrome.runtime.sendMessage({ type: "dictation_state" }).then((r) => {
-  if (r?.mode) showComposer({ active: true, label: r.mode.label, text: r.mode.text });
+  if (!r?.mode) return;
+  if (r.mode.kind === "compose") {
+    showMail({ active: true, fields: Object.keys(r.mode.fields ?? {}), currentField: r.mode.currentField, text: r.mode.text });
+  } else {
+    showComposer({ active: true, label: r.mode.label, text: r.mode.text });
+  }
 }).catch(() => {});
 
 if (!recognizer.available()) {

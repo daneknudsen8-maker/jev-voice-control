@@ -41,7 +41,7 @@ microphone.** Click *Start listening* (or press Space). Grant mic permission whe
 | Chaining | "go to espn and click scores", "open gmail then search for invoices" |
 | Clicking | "click the login button", "open the comments on the Rust story", "show me the guidelines" |
 | Typing | "type nice write-up in the comment box", "search this site for rust" |
-| Writing | "write an email", "let me dictate a comment" → then just talk |
+| Writing | "compose a new email" → "to …", "cc …", "the subject should be …", "the body should say …" |
 | Tabs | "new tab", "switch to the gmail tab", "close this tab", "close the youtube tab" |
 | Tabs by position | "next tab", "previous tab", "go left two tabs", "switch back", "last tab" |
 | By position | "open the second email", "click the third link", "open the last one" |
@@ -98,6 +98,40 @@ there, since the remaining steps were written for a page that may now never appe
 ```sh
 cd test && node --env-file=../.env multistep-harness.js
 # 14/14 passed · 0 false splits
+```
+
+## Writing an email
+
+Say **"compose a new email"**. If there's no composer open it clicks the button that opens one, then
+binds the whole **form** — recipient, cc, subject, body — not a single box.
+
+From there, name a field and speak its value. They can be separate utterances:
+
+```
+"to"                                    → switches to the To field, waits
+"Sarah Chen"                            → goes into To
+"subject line should be"                → switches to Subject
+"new tool"                              → goes into Subject
+"the body should say hi Sarah, ..."     → names and fills Body in one breath
+"cc Marco"                              → To/Cc/Bcc all work the same way
+```
+
+**The chosen field persists.** Once you're in the body, everything you say keeps going there until you
+name another field — so you can dictate several sentences without repeating yourself.
+
+The panel shows the email taking shape with the active field marked, so you can see where your words
+are landing.
+
+Spoken addresses are converted in code: "marco at example dot com" becomes `marco@example.com`. Plain
+names are left alone, and so is a body that happens to say "meet at the dot com place".
+
+Which field an utterance belongs to, when you don't name one, is the judgment Jev makes. Naming one is
+string work, so code reads it — and a named field always wins, so "cc Sarah" is never mistaken for a
+command.
+
+```sh
+cd test && node --env-file=../.env compose-harness.js
+# 16/16 — replays a real failed session as its first script
 ```
 
 ## Writing longer text
@@ -223,6 +257,7 @@ extension/
   commands.js          ← the Jev question design. Start here.
   content.js           page element inventory + command execution
   panel.html/.js/.css  mic + transcript + activity log
+  compose.js           structured email: field routing, spoken addresses
   dictation.js         writing mode: content vs command, punctuation, appending
   speech/index.js      swappable STT; webspeech.js is the default
 test/
@@ -230,6 +265,7 @@ test/
   dictation-harness.js mode-confusion tests; fails loudly on dangerous misses
   multistep-harness.js chained commands vs single actions containing "and"
   ordinal-harness.js   positional targeting over a realistic inbox
+  compose-harness.js   email field routing, scripted as conversations
   fixtures.js          fake page, tabs, and the expected outcomes
 docs/typesafe/         full local TypeSafe docs — read 00-core.md first
 ```

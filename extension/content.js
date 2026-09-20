@@ -15,7 +15,8 @@ let counter = 0;
 
 // Dictation binds to one element and survives inventory rebuilds, which would
 // otherwise drop the id out from under an in-progress message.
-let dictation = null;  // { el, chunks: [] }
+let dictation = null;   // { el, chunks: [] }
+let composer = null;    // { fields: { to, cc, bcc, subject, body }, chunks: [] }
 
 const CLICKABLE = [
   "a[href]", "button", "[role=button]", "[role=link]", "[role=tab]",
@@ -216,6 +217,51 @@ function setValue(el, text) {
   el.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
+/**
+ * Work out what part of a message a field is for. Reads every label a page
+ * might use; Gmail, Outlook and plain forms all name these differently.
+ */
+function fieldRole(el) {
+  const signals = [
+    el.getAttribute("aria-label"), el.getAttribute("placeholder"), el.getAttribute("name"),
+    el.getAttribute("id"), el.getAttribute("data-name"), el.labels?.[0]?.textContent,
+    el.closest("[aria-label]")?.getAttribute("aria-label"),
+  ].filter(Boolean).join(" ").toLowerCase();
+
+  if (/\bbcc\b/.test(signals)) return "bcc";
+  if (/\bcc\b|carbon copy/.test(signals)) return "cc";
+  if (/subject/.test(signals)) return "subject";
+  if (/\bto\b|recipient/.test(signals)) return "to";
+  if (/body|message|compose|rich text/.test(signals)) return "body";
+
+  // Nothing said so: a big editable area is the body, a single line is not.
+  if (el.isContentEditable || el.tagName === "TEXTAREA") return "body";
+  return null;
+}
+
+/** Find the compose form around a field, and everything writable inside it. */
+function composerFields(seed) {
+  const scope = seed?.closest("form, [role=dialog], dialog, [aria-label*='ompose' i], .compose, [data-compose]")
+             ?? document;
+  const found = {};
+  const listed = [];
+
+  for (const el of scope.querySelectorAll(TYPEABLE)) {
+    if (!visible(el)) continue;
+    const role = fieldRole(el);
+    const id = `f${counter++}`;
+    registry.set(id, el);
+    listed.push({ id, role, label: labelFor(el) || role || "field", kind: roleOf(el) });
+    if (role && !found[role]) found[role] = id;   // first of each role wins
+  }
+
+  if (!found.body) {
+    const areas = listed.filter((f) => registry.get(f.id)?.isContentEditable || /area|textbox/i.test(f.kind));
+    if (areas.length) found.body = areas[areas.length - 1].id;
+  }
+  return { found, listed };
+}
+
 /** Read whatever is currently in a field. */
 function readField(el) {
   return el.isContentEditable ? el.innerText : (el.value ?? "");
@@ -223,6 +269,76 @@ function readField(el) {
 
 function execute(command) {
   switch (command.do) {
+    case "bind_compose": {
+      const seed = command.id ? registry.get(command.id) : document.activeElement;
+      const { found, listed } = composerFields(seed);
+      if (!Object.keys(found).length) return { ok: false, error: "no message fields found" };
+
+      composer = { fields: found, chunks: [] };
+      const first = registry.get(found.to ?? found.subject ?? found.body);
+      first?.focus();
+      first?.scrollIntoView({ block: "center", behavior: "smooth" });
+      if (first) flash(first, "#3b82f6");
+
+      const current = {};
+      for (const [role, id] of Object.entries(found)) current[role] = readField(registry.get(id));
+      return { ok: true, did: "composing", fields: found, listed, text: current };
+    }
+
+    case "write_field": {
+      if (!composer) return { ok: false, error: "no message open" };
+      const id = composer.fields[command.role];
+      const el = id && registry.get(id);
+      if (!el?.isConnected) return { ok: false, error: `no ${command.role} field on this page` };
+
+      composer.chunks.push({ role: command.role, before: readField(el) });
+      el.focus();
+      setValue(el, command.text);
+      // Recipient fields usually need a keystroke to turn text into a chip.
+      if (command.commit && ["to", "cc", "bcc"].includes(command.role)) {
+        el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true }));
+      }
+      el.scrollIntoView({ block: "center" });
+      flash(el, "#3b82f6");
+      return { ok: true, did: `${command.role}: ${command.text}`, role: command.role, text: command.text };
+    }
+
+    case "read_composer": {
+      if (!composer) return { ok: false, error: "no message open" };
+      const text = {};
+      for (const [role, id] of Object.entries(composer.fields)) {
+        const el = registry.get(id);
+        if (el?.isConnected) text[role] = readField(el);
+      }
+      return { ok: true, text };
+    }
+
+    case "undo_composer": {
+      if (!composer) return { ok: false, error: "no message open" };
+      const last = composer.chunks.pop();
+      if (!last) return { ok: false, error: "nothing to undo" };
+      const el = registry.get(composer.fields[last.role]);
+      if (el?.isConnected) setValue(el, last.before);
+      return { ok: true, did: `undid ${last.role}`, role: last.role, text: last.before };
+    }
+
+    case "unbind_compose":
+      composer = null;
+      return { ok: true, did: "stopped composing" };
+
+    case "send_composer": {
+      if (!composer) return { ok: false, error: "no message open" };
+      const anyField = registry.get(Object.values(composer.fields)[0]);
+      const scope = anyField?.closest("form, [role=dialog], dialog") ?? document;
+      const send = [...scope.querySelectorAll("button, [role=button], input[type=submit]")]
+        .filter((b) => visible(b))
+        .find((b) => /^\s*send\b/i.test(labelFor(b)) || /\bsend\b/i.test(b.getAttribute("aria-label") ?? ""));
+      if (!send) return { ok: false, error: "couldn't find the Send button" };
+      send.click();
+      composer = null;
+      return { ok: true, did: "sent" };
+    }
+
     case "bind_dictation": {
       const el = registry.get(command.id) ?? document.activeElement;
       if (!el || !(el.isContentEditable || "value" in el)) {

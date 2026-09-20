@@ -3,6 +3,7 @@
 
 import { buildCommandQuestions, matchLocalCommand, matchTabNavigation, resolveCommand, splitSteps } from "./commands.js";
 import { appendChunk, buildDictationQuestions, resolveDictation } from "./dictation.js";
+import { buildComposeQuestions, REPLACES, resolveCompose, spokenEmail } from "./compose.js";
 import "./open-panel.js";
 
 const PROXY = "http://127.0.0.1:8787/systemone";
@@ -186,6 +187,7 @@ async function handleUtterance(transcript) {
 
   // While a message is open, almost everything said is words for that message.
   const mode = await getMode();
+  if (mode?.kind === "compose") return await handleCompose(transcript, mode);
   if (mode) return await handleDictation(transcript, mode);
 
   // Tab movement by position: arithmetic, so code decides it.
@@ -261,6 +263,102 @@ async function handleUtterance(transcript) {
       tabs,
     },
   };
+}
+
+/**
+ * One utterance while a structured message (recipient, subject, body) is open.
+ * The chosen field persists: people name a field and speak its value as two
+ * separate utterances.
+ */
+async function handleCompose(transcript, mode) {
+  const tab = await activeTab();
+  if (tab.id !== mode.tabId) {
+    await setMode(null);
+    return { kind: "error", message: "you switched tabs, so I stopped writing", why: "compose_tab_changed" };
+  }
+
+  const available = Object.keys(mode.fields ?? {});
+  const quick = resolveCompose(null, transcript, mode.currentField);
+  let answers = null;
+  let decision = quick;
+
+  // An exact control or an explicitly named field needs no model call.
+  if (!["control_phrase", "named_field", "named_field_only"].includes(quick.why)) {
+    answers = await askJev(
+      {
+        utterance: transcript,
+        current_field: mode.currentField ?? "body",
+        message_so_far: mode.text ?? {},
+      },
+      buildComposeQuestions(available),
+    );
+    decision = resolveCompose(answers, transcript, mode.currentField);
+  }
+
+  const report = (extra) => ({
+    ...extra, answers, usage: lastUsage, decision,
+    compose: { active: true, fields: available, currentField: extra.currentField ?? mode.currentField, text: extra.text ?? mode.text },
+  });
+
+  switch (decision.do) {
+    case "switch":
+      await setMode({ ...mode, currentField: decision.role });
+      return report({ kind: "field", message: `${decision.role}…`, currentField: decision.role, why: decision.why, detail: decision.detail });
+
+    case "write": {
+      const role = available.includes(decision.role) ? decision.role : (available.includes("body") ? "body" : available[0]);
+      if (!role) return report({ kind: "error", message: "this message has no fields I can write to", why: "no_fields" });
+
+      const previous = mode.text?.[role] ?? "";
+      // Recipients replace and commit to a chip; subject and body accumulate.
+      const value = REPLACES.has(role) ? spokenEmail(decision.text) : appendChunk(previous, decision.text);
+
+      const result = await talkToPage(tab.id, {
+        type: "execute",
+        command: { do: "write_field", role, text: value, commit: REPLACES.has(role) },
+      }).catch((error) => ({ ok: false, error: error.message }));
+
+      if (!result.ok) return report({ kind: "error", message: result.error, why: "write_failed" });
+
+      const text = { ...(mode.text ?? {}), [role]: value };
+      await setMode({ ...mode, currentField: role, text });
+      return report({ kind: "field_written", message: `${role}: ${value}`, currentField: role, text, why: decision.why, detail: decision.detail });
+    }
+
+    case "undo": {
+      const result = await talkToPage(tab.id, { type: "execute", command: { do: "undo_composer" } })
+        .catch((error) => ({ ok: false, error: error.message }));
+      if (!result.ok) return report({ kind: "error", message: result.error, why: decision.why });
+      const text = { ...(mode.text ?? {}), [result.role]: result.text ?? "" };
+      await setMode({ ...mode, text });
+      return report({ kind: "field_written", message: `undid ${result.role}`, text, why: decision.why });
+    }
+
+    case "read_back": {
+      const t = mode.text ?? {};
+      const lines = available.filter((r) => t[r]).map((r) => `${r}: ${t[r]}`);
+      return report({ kind: "answer", message: lines.length ? lines.join("\n") : "nothing written yet", why: decision.why });
+    }
+
+    case "clear":
+      await setPending({ command: { do: "clear_composer" }, tabId: tab.id, utterance: transcript, compose: true });
+      return report({ kind: "confirm", message: "Erase this message and start over?", why: decision.why });
+
+    case "send": {
+      const t = mode.text ?? {};
+      const preview = available.filter((r) => t[r]).map((r) => `${r}: ${t[r]}`).join("\n");
+      await setPending({ command: { do: "send_composer" }, tabId: tab.id, utterance: transcript, compose: true });
+      return report({ kind: "confirm", message: `Send this?\n\n${preview || "(empty)"}`, why: decision.why });
+    }
+
+    case "finish":
+      await talkToPage(tab.id, { type: "execute", command: { do: "unbind_compose" } }).catch(() => {});
+      await setMode(null);
+      return { ...report({ kind: "done", message: "stopped composing", why: decision.why }), compose: { active: false } };
+
+    default:
+      return report({ kind: "error", message: `unhandled compose action ${decision.do}` });
+  }
 }
 
 /**
@@ -408,6 +506,41 @@ async function carryOut(decision, tab, transcript) {
     case "ask_page":
       return await answerAboutPage(tab, transcript);
 
+/**
+ * Bind whatever is open for writing. A form with a recipient/subject/body gets
+ * structured compose mode; a lone comment box gets plain dictation.
+ */
+async function beginWriting(tabId, seedId) {
+  const form = await talkToPage(tabId, { type: "execute", command: { do: "bind_compose", id: seedId } })
+    .catch((error) => ({ ok: false, error: error.message }));
+
+  const roles = form.ok ? Object.keys(form.fields ?? {}) : [];
+  const structured = roles.some((r) => r !== "body");   // more than just a box
+
+  if (form.ok && structured) {
+    const first = form.fields.to ? "to" : (form.fields.subject ? "subject" : "body");
+    await setMode({ kind: "compose", tabId, fields: form.fields, currentField: first, text: form.text ?? {} });
+    return {
+      kind: "composing",
+      message: `Writing an email. Fields: ${roles.join(", ")}. Start with "to …", or say "the subject should be …".`,
+      compose: { active: true, fields: roles, currentField: first, text: form.text ?? {} },
+    };
+  }
+
+  // Just one box: plain dictation.
+  const bindId = seedId ?? (form.ok ? Object.values(form.fields)[0] : undefined);
+  const bound = await talkToPage(tabId, { type: "execute", command: { do: "bind_dictation", id: bindId } })
+    .catch((error) => ({ ok: false, error: error.message }));
+  if (!bound.ok) return { kind: "error", message: bound.error, why: "compose_bind_failed" };
+
+  await setMode({ kind: "dictation", tabId, fieldId: bindId, label: bound.label, text: bound.text ?? "" });
+  return {
+    kind: "composing",
+    message: `Writing into ${bound.label || "the field"}. Say "stop dictating" when done.`,
+    dictation: { active: true, label: bound.label, text: bound.text ?? "" },
+  };
+}
+
     // Click the thing that opens a composer, wait for it, then bind to the box
     // it produced. Two page interactions, one spoken command.
     case "compose_via": {
@@ -417,38 +550,11 @@ async function carryOut(decision, tab, transcript) {
 
       await new Promise((r) => setTimeout(r, 700));   // let the composer appear
 
-      const fresh = await talkToPage(tab.id, { type: "inventory", utterance: transcript })
-        .catch(() => ({ typeables: [] }));
-      // Prefer a big box (a message body) over a one-line input.
-      const box = fresh.typeables.find((t) => /area|body|message|contenteditable|textbox/i.test(`${t.kind} ${t.text}`))
-               ?? fresh.typeables[0];
-      if (!box) {
-        return { kind: "clarify", message: `Opened it, but I don't see a box to write in yet — say "write an email" again.`, why: "composer_no_field" };
-      }
-
-      const bound = await talkToPage(tab.id, { type: "execute", command: { do: "bind_dictation", id: box.id } })
-        .catch((error) => ({ ok: false, error: error.message }));
-      if (!bound.ok) return { kind: "error", message: bound.error, why: "compose_bind_failed" };
-
-      await setMode({ tabId: tab.id, fieldId: box.id, label: bound.label, text: bound.text ?? "" });
-      return {
-        kind: "composing",
-        message: `Opened it. Writing into ${bound.label || "the message"}. Say "stop dictating" when done.`,
-        dictation: { active: true, label: bound.label, text: bound.text ?? "" },
-      };
+      return await beginWriting(tab.id, undefined);
     }
 
-    case "compose": {
-      const result = await talkToPage(tab.id, { type: "execute", command: decision.command })
-        .catch((error) => ({ ok: false, error: error.message }));
-      if (!result.ok) return { kind: "error", message: result.error, why: "compose_bind_failed" };
-      await setMode({ tabId: tab.id, fieldId: decision.fieldId, label: result.label, text: result.text ?? "" });
-      return {
-        kind: "composing",
-        message: `Writing into ${result.label || "the field"}. Say "stop dictating" when done.`,
-        dictation: { active: true, label: result.label, text: result.text ?? "" },
-      };
-    }
+    case "compose":
+      return await beginWriting(tab.id, decision.fieldId);
 
     case "execute":
       return await run(decision.command, tab.id);
@@ -660,6 +766,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
         let outcome;
         if (!msg.yes) {
           outcome = { kind: "ignored", message: "cancelled by user" };
+        } else if (pending.compose) {
+          const cmd = command.do === "clear_composer"
+            ? { do: "write_field", role: (await getMode())?.currentField ?? "body", text: "" }
+            : command;
+          const r = await talkToPage(tabId, { type: "execute", command: cmd }).catch((e) => ({ ok: false, error: e.message }));
+          outcome = r.ok ? { kind: "done", message: r.did ?? "done" } : { kind: "error", message: r.error };
+          if (command.do === "send_composer" && r.ok) await setMode(null);
         } else if (pending.dictation) {
           const r = await talkToPage(tabId, { type: "execute", command }).catch((e) => ({ ok: false, error: e.message }));
           outcome = r.ok ? { kind: "done", message: r.did ?? "done" } : { kind: "error", message: r.error };
