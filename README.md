@@ -40,7 +40,7 @@ microphone.** Click *Start listening* (or press Space). Grant mic permission whe
 | Moving | "scroll down", "back to the top", "go back", "reload" |
 | Clicking | "click the login button", "open the comments on the Rust story", "show me the guidelines" |
 | Typing | "search for rust async", "type nice write-up in the comment box" |
-| Tabs | "new tab", "switch to the gmail tab", "close the youtube tab" |
+| Tabs | "new tab", "switch to the gmail tab", "close this tab", "close the youtube tab" |
 | Going places | "go to hacker news", "go to espn", "open github.com", "take me to arstechnica dot com" |
 | Searching | "google mechanical keyboards" or "search for X" (the web) · "search this site for X" (the page's own box) |
 | Asking | "is there anything about kubernetes here", "find the pricing section" |
@@ -63,9 +63,11 @@ there is nothing to read.
 ## Safety
 
 Every utterance gets a **risk** Score (0–3) for how hard it is to undo. Anything at 1.6 or above, or
-whose target text matches a danger pattern, asks for confirmation before acting. Closing a tab always
-confirms — that's a policy decision in code, not a judgment left to the model, since a tab may hold
-unsaved work.
+whose target text matches a danger pattern, asks for confirmation before acting.
+
+Closing the tab you're looking at just runs — it's explicit, and cmd-shift-T brings it back. Closing a
+tab you *named but can't see* confirms first, since that's where a misheard word does damage. That
+split is policy in code, not a judgment left to the model.
 
 A low-confidence target offers you the top three candidates instead of guessing. Speech that isn't
 addressed to the browser is dropped on an `is_command` probability below 0.5 — in testing, ordinary

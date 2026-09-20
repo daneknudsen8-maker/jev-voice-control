@@ -165,7 +165,7 @@ async function carryOut(decision, tab, transcript) {
       return { kind: "choose", message: decision.say, options: decision.options, debug: decision.debug };
 
     case "confirm":
-      pending = { command: decision.command, tabId: tab.id, utterance: transcript };
+      await setPending({ command: decision.command, tabId: tab.id, utterance: transcript });
       return { kind: "confirm", message: decision.say, risk: decision.risk };
 
     case "ask_page":
@@ -179,7 +179,18 @@ async function carryOut(decision, tab, transcript) {
   }
 }
 
-let pending = null;
+// A pending confirmation must outlive the service worker, which Chrome stops
+// after ~30s idle. A module variable would be gone by the time you answered.
+const PENDING_KEY = "pendingConfirmation";
+
+async function setPending(value) {
+  await chrome.storage.session.set({ [PENDING_KEY]: value });
+}
+async function takePending() {
+  const stored = (await chrome.storage.session.get(PENDING_KEY))[PENDING_KEY] ?? null;
+  await chrome.storage.session.remove(PENDING_KEY);
+  return stored;
+}
 
 /** Report the full outcome of an utterance. Never allowed to break a command. */
 async function record(entry) {
@@ -323,9 +334,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
         });
         respond(result);
       } else if (msg.type === "confirm") {
+        const pending = await takePending();
         if (!pending) return respond({ kind: "error", message: "nothing to confirm" });
         const { command, tabId, utterance } = pending;
-        pending = null;
         const outcome = msg.yes ? await run(command, tabId) : { kind: "ignored", message: "cancelled by user" };
         await record({
           utterance: `${utterance ?? "(confirm)"} → ${msg.yes ? "CONFIRMED" : "CANCELLED"}`,

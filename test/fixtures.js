@@ -56,6 +56,9 @@ export const CASES = [
   { say: "go to wikipedia",                          expect: "navigate" },  // not open anywhere: really navigate
   { say: "switch to the gmail tab",                  expect: "switch_tab", target: "t101" },
   { say: "close the youtube tab",                    expect: "close_tab",  target: "t103", risky: true },
+  // Closing the tab in front of you runs: explicit, and cmd-shift-T undoes it.
+  { say: "close this tab",                           expect: "close_tab",  target: "current" },
+  { say: "close it",                                 expect: "close_tab",  target: "current" },
   { say: "is there anything about kubernetes here",  expect: "ask_page" },
   { say: "stop listening",                           expect: "stop" },
   { say: "uh so anyway what were you saying",        expect: "none" },
@@ -83,5 +86,6 @@ export const BLANK_TAB_CASES = [
   { say: "open a new tab",      expect: "new_tab" },
   { say: "switch to the gmail tab", expect: "switch_tab" },
   { say: "go back",             expect: "back" },
+  { say: "close this tab",      expect: "close_tab" },   // must work with no other tabs
   { say: "click the login link", expect: "clarify" },  // correctly refused: no page
 ];

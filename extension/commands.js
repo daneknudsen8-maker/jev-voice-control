@@ -302,22 +302,40 @@ export function resolveCommand(answers, ctx) {
 
     case "switch_tab":
     case "close_tab": {
-      const t = answers.tab_target;
       const closing = action.choice === "close_tab";
-      if (!t || t.choice === "no_match") {
-        if (closing) return confirmFor({ do: "close_tab", id: "current" }, "close this tab");
-        return { kind: "clarify", why: "tab_no_match", say: "Which tab?", detail: "no matching tab" };
+      const t = answers.tab_target;
+
+      // With no other tabs open the tab_target question is never asked, so
+      // "close this tab" must still resolve. Treat an absent or no-match
+      // answer on a close as meaning the tab in front of you.
+      const target = (!t || t.choice === "no_match") ? "current" : t.choice;
+
+      if (!closing && target === "current") {
+        return { kind: "clarify", why: "tab_no_match", say: "Which tab?", detail: "no matching tab to switch to" };
       }
-      if (t.choice !== "current" && t.confidence < FLOORS.tab) {
+      if (target !== "current" && t && t.confidence < FLOORS.tab) {
         return { kind: "clarify", why: "tab_ambiguous", say: "Which tab did you mean?", detail: `tab conf ${t.confidence.toFixed(2)} < ${FLOORS.tab}` };
       }
-      const tab = tabs.find((x) => x.id === t.choice);
-      const label = t.choice === "current" ? "this tab" : (tab?.title ?? "that tab");
-      // Always confirm a close: a tab may hold unsaved work, and Jev reasonably
-      // rates it low-risk since Chrome can reopen it. Policy belongs in code.
-      return closing
-        ? { kind: "confirm", command: { do: "close_tab", id: t.choice }, say: `Close ${label}?`, risk }
-        : { kind: "execute", command: { do: "switch_tab", id: t.choice }, why: "ok" };
+
+      if (!closing) {
+        return { kind: "execute", command: { do: "switch_tab", id: target }, why: "ok" };
+      }
+
+      // Closing the tab you are looking at is explicit and reversible
+      // (cmd-shift-T), so it runs. Closing one you named but cannot see is
+      // where a misheard word does damage, so that confirms.
+      if (target === "current") {
+        return { kind: "execute", command: { do: "close_tab", id: "current" }, why: "ok", risk };
+      }
+      const tab = tabs.find((x) => x.id === target);
+      return {
+        kind: "confirm",
+        command: { do: "close_tab", id: target },
+        why: "close_other_tab",
+        say: `Close "${tab?.title ?? "that tab"}"?`,
+        detail: "closing a tab you are not looking at always confirms",
+        risk,
+      };
     }
 
     case "ask_page":

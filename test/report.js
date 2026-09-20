@@ -36,7 +36,7 @@ const EXPLAIN = {
   tab_ambiguous:      ["several tabs looked alike", null],
   risk_gate:          ["stopped to confirm: risk >= 1.6", "lower CONFIRM_RISK if it nags too much"],
   danger_word:        ["stopped to confirm: target matched DANGER pattern", "edit the DANGER regex in commands.js"],
-  close_tab_policy:   ["tab closes always confirm", "policy in code — change in resolveCommand"],
+  close_other_tab:    ["closing a tab you are not looking at", "confirms by design; change in resolveCommand"],
   user_confirmed:     ["you approved it", null],
   user_cancelled:     ["you declined it", null],
   page_unavailable:   ["couldn't reach the page", "usually a stale content script — reload the tab, or the extension if the manifest changed"],
