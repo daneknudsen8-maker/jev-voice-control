@@ -43,6 +43,21 @@ const SCRIPTS = [
     ],
   },
   {
+    // Every line here is verbatim from a session where it went wrong.
+    name: "regressions from a real session",
+    lines: [
+      // wrote its own words into the To field
+      { say: "let's send it to",             field: "to",   writes: false },
+      { say: "Zeno",                         field: "to",   writes: true },
+      // a browser command that landed in the To field
+      { say: "yeah click on the second one down", control: "other_command" },
+      { say: "the subject should be",        field: "subject", writes: false },
+      { say: "hello",                        field: "subject", writes: true },
+      { say: "and the body of the email should say", field: "body", writes: false },
+      { say: "what's up",                    field: "body", writes: true },
+    ],
+  },
+  {
     name: "controls still work",
     lines: [
       { say: "to Jane",                     field: "to",      writes: true },
@@ -86,6 +101,7 @@ for (const script of SCRIPTS) {
     if (line.control) {
       ok = decision.do === line.control;
       shown = `control: ${decision.do}`;
+      // A browser command must not disturb which field is being filled.
     } else {
       const wrote = decision.do === "write";
       if (decision.role) current = decision.role;

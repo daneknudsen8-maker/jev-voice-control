@@ -239,6 +239,13 @@ export function strongNameMatch(transcript, elements = [], tabs = []) {
 // Below this there is not even enough signal to trust a name match.
 const NAME_MATCH_FLOOR = 0.15;
 
+// A bare site name — "canvas", "notion" — reads as conversation and scores low
+// on is_command, but the names_a_site Noul separates it sharply from noise: in
+// a real session, site names scored 0.80-0.92 while every misheard fragment sat
+// at 0.03-0.22. Allowed only with that corroboration and a real destination.
+const SITE_NAME_COMMAND_FLOOR = 0.30;
+const SITE_NAME_CONFIRMATION = 0.75;
+
 // Confidence floors, scaled to consequence — docs/typesafe/00-core.md.
 // Below the floor we ask rather than act.
 const FLOORS = {
@@ -281,6 +288,19 @@ export function resolveCommand(answers, ctx) {
         : { kind: "execute", command: { do: "click", id: named.id }, why: "named_element",
             detail: `bare name matched "${named.label}" (is_command ${isCommand.toFixed(2)})` };
     }
+    // Nothing on screen matched. A bare site name, corroborated by
+    // names_a_site and resolvable to an address, is still a command.
+    const namesSite = answers.names_a_site?.noul ?? 0;
+    if (isCommand >= SITE_NAME_COMMAND_FLOOR && namesSite >= SITE_NAME_CONFIRMATION
+        && ["navigate", "switch_tab"].includes(action.choice)) {
+      const query = extractSearchQuery(transcript);
+      const url = spokenDomain(transcript) ?? KNOWN_SITES[query?.toLowerCase()] ?? guessDomain(query ?? "");
+      if (url) {
+        return { kind: "execute", command: { do: "navigate", url }, why: "bare_site_name",
+                 detail: `names_a_site ${namesSite.toFixed(2)} with is_command ${isCommand.toFixed(2)}` };
+      }
+    }
+
     return { kind: "ignore", why: "not_a_command", detail: `is_command ${isCommand.toFixed(2)} < ${IS_COMMAND_FLOOR}`, isCommand };
   }
   if (action.choice === "none") {

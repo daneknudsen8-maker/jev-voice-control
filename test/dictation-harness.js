@@ -50,6 +50,10 @@ const CASES = [
   // Short genuine controls must survive the length rule
   { say: "erase all of it", expect: "clear" },
   { say: "go back one sentence", expect: "undo" },
+
+  // Prose that mentions clicking or scrolling is still prose.
+  { say: "click the link at the bottom of the page when you get it", expect: "append" },
+  { say: "scroll down to the part about pricing and tell me", expect: "append" },
 ];
 
 const questions = buildDictationQuestions();

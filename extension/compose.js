@@ -24,15 +24,24 @@ const FIELD_PREFIXES = [
   ["to",      /^(?:it'?s?\s+)?(?:going|addressed)\s+to\s*(.*)$/i],
 ];
 
+// People do not start sentences with the keyword. "let's send it to …",
+// "okay now cc Sarah". Stripped before matching a field name, never from the
+// value itself.
+const FILLER = /^(?:(?:okay|ok|alright|so|now|then|and|well|yeah|yes|um|uh|like|just|let'?s|lets|please|i(?:'?d| would)?\s+(?:like\s+to|want\s+to)|i'?ll|can\s+you|could\s+you|we\s+should|we'?ll)\s+)+/i;
+
 /**
  * Pull an explicit field name off the front of an utterance.
  * Returns { role, text } — text may be empty, meaning "switch to this field".
  */
 export function matchFieldPrefix(transcript) {
   const said = transcript.trim().replace(/[.!?]+$/, "");
-  for (const [role, pattern] of FIELD_PREFIXES) {
-    const m = said.match(pattern);
-    if (m) return { role, text: (m[1] ?? "").trim() };
+  const stripped = said.replace(FILLER, "").trim();
+
+  for (const candidate of stripped === said ? [said] : [said, stripped]) {
+    for (const [role, pattern] of FIELD_PREFIXES) {
+      const m = candidate.match(pattern);
+      if (m) return { role, text: (m[1] ?? "").trim() };
+    }
   }
   return null;
 }
@@ -84,6 +93,7 @@ export function buildComposeQuestions(available = FIELD_ROLES) {
         undo: "Remove the last thing written",
         clear: "Erase the message and start over",
         read_back: "Read back what has been written so far",
+        other_command: "An instruction to the BROWSER that has nothing to do with writing this message — clicking something on the page, scrolling, switching tabs, opening a site",
         none: "Not an instruction — these words belong in the email",
       },
     },
@@ -118,6 +128,15 @@ export function spokenEmail(text) {
   return /^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(joined) ? joined.toLowerCase() : said;
 }
 
+// other_command gets its own bar. The long-utterance ceiling exists to stop a
+// sentence being mistaken for a DESTRUCTIVE control; running a browser command
+// destroys nothing and leaves the message open, while typing "click the second
+// email" into an email is itself a failure. Real margins are wide: browser
+// commands score 0.99-1.00 here against 0.51 for prose that merely mentions
+// sending.
+const OTHER_COMMAND_FLOOR = 0.90;
+const OTHER_COMMAND_CONTENT_CEILING = 0.35;
+
 // Recipients replace (and commit to a chip); subject and body accumulate.
 export const REPLACES = new Set(["to", "cc", "bcc"]);
 
@@ -142,9 +161,22 @@ export function resolveCompose(answers, transcript, currentField = "body") {
   const looksLikeControl = control && control.choice !== "none"
     && control.confidence >= controlBar && isContent < contentBar;
 
+  // Checked before the length rule, on its own thresholds.
+  if (!prefix && control?.choice === "other_command"
+      && control.confidence >= OTHER_COMMAND_FLOOR
+      && isContent <= OTHER_COMMAND_CONTENT_CEILING) {
+    return { do: "other_command", why: "browser_command_while_composing",
+             detail: `is_content ${isContent.toFixed(2)} · other_command@${control.confidence.toFixed(2)}` };
+  }
+
   // A named field means the user is filling the message in, whatever else the
   // words resemble. "cc Sarah" is not a control.
   if (looksLikeControl && !prefix) {
+    // Not about the message at all — hand it back to normal command handling.
+    if (control.choice === "other_command") {
+      return { do: "other_command", why: "browser_command_while_composing",
+               detail: `is_content ${isContent.toFixed(2)} · control other_command@${control.confidence.toFixed(2)}` };
+    }
     return {
       do: control.choice, why: "control_judged",
       detail: `is_content ${isContent.toFixed(2)} · control ${control.choice}@${control.confidence.toFixed(2)}`,

@@ -180,15 +180,19 @@ async function openTabs(currentId) {
 }
 
 /** Handle a finished utterance. Returns a report for the panel to render. */
-async function handleUtterance(transcript) {
+async function handleUtterance(transcript, { skipMode = false } = {}) {
   // Assistant meta-commands never reach the model.
   const local = matchLocalCommand(transcript);
   if (local) return { kind: "stop", message: "listening paused", local: true };
 
   // While a message is open, almost everything said is words for that message.
-  const mode = await getMode();
-  if (mode?.kind === "compose") return await handleCompose(transcript, mode);
-  if (mode) return await handleDictation(transcript, mode);
+  // skipMode is set when compose mode has already decided this utterance is a
+  // browser command rather than part of the message.
+  if (!skipMode) {
+    const mode = await getMode();
+    if (mode?.kind === "compose") return await handleCompose(transcript, mode);
+    if (mode) return await handleDictation(transcript, mode);
+  }
 
   // Tab movement by position: arithmetic, so code decides it.
   const tabMove = matchTabNavigation(transcript);
@@ -332,6 +336,14 @@ async function handleCompose(transcript, mode) {
       const text = { ...(mode.text ?? {}), [result.role]: result.text ?? "" };
       await setMode({ ...mode, text });
       return report({ kind: "field_written", message: `undid ${result.role}`, text, why: decision.why });
+    }
+
+    // A browser command spoken while the message is open: run it, keep the
+    // message open so writing can continue afterwards.
+    case "other_command": {
+      const result = await handleUtterance(transcript, { skipMode: true });
+      return { ...result, answers, usage: lastUsage, decision,
+               compose: { active: true, fields: available, currentField: mode.currentField, text: mode.text } };
     }
 
     case "read_back": {
