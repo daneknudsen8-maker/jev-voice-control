@@ -37,6 +37,17 @@ that pricing and rate limits are the parts most likely to have moved.
 
 The `typesafe:typesafe-ai` skill is installed and points at the live docs; prefer the local copy above.
 
+## Fixing what didn't work
+
+After a real voice session, `/voice-gaps` (`.claude/skills/voice-gaps/SKILL.md`) reads the trace,
+separates genuine gaps from correct refusals and microphone noise, and drives the fix. Its analysis
+script is `test/session.js`.
+
+The rule that has decided nearly every fix in this project: **code owns arithmetic, counting,
+position, dates, exact phrases and state; Jev owns judgment about meaning.** Most failures here have
+been plumbing, not the model — a missing permission, a guard in the wrong place, a question asked
+only conditionally. Check the confidences before touching a prompt.
+
 ## Easy things to get wrong
 
 - **Batch questions.** Put every question the code might need in ONE `systemOne` call, speculative ones

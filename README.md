@@ -191,6 +191,32 @@ conversation scores 0.03–0.04 while real commands score 0.90+.
 Thresholds are all at the top of [extension/commands.js](extension/commands.js) (`FLOORS`,
 `CONFIRM_RISK`, `DANGER`). **Tune them on your own speech** — the current values are a starting point.
 
+## Closing gaps after a session — `/voice-gaps`
+
+In Claude Code, run **`/voice-gaps`**. It reads your most recent session, separates commands that
+should have worked from ones correctly refused, fixes the real gaps, and proves the fix with tests.
+
+The analysis it runs is available on its own:
+
+```sh
+cd test && node session.js          # the most recent session
+node session.js --n 2               # the one before that
+node session.js --json              # full detail, every candidate element
+```
+
+A session is a run of commands with no gap longer than 15 minutes. Commands are sorted four ways, and
+only the last is a problem:
+
+| | |
+|---|---|
+| `worked` | ran as intended |
+| `refused by design` | a confirmation or risk gate doing its job |
+| `noise ignored` | dropped, and nothing on screen matched — the mic working correctly |
+| `gaps` | should have worked and didn't |
+
+That separation matters: a voice tool hears side conversation constantly, and counting every ignored
+phrase as a failure would bury the real ones.
+
 ## Seeing why a command did or didn't run
 
 Every utterance is recorded with the gate that decided it:
@@ -266,6 +292,9 @@ test/
   multistep-harness.js chained commands vs single actions containing "and"
   ordinal-harness.js   positional targeting over a realistic inbox
   compose-harness.js   email field routing, scripted as conversations
+  session.js           groups the trace into sessions; separates gaps from noise
+.claude/skills/
+  voice-gaps/          the /voice-gaps command
   fixtures.js          fake page, tabs, and the expected outcomes
 docs/typesafe/         full local TypeSafe docs — read 00-core.md first
 ```

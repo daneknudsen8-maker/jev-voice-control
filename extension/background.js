@@ -586,6 +586,20 @@ async function takePending() {
   return stored;
 }
 
+// Every result kind that means the command did what was asked. Writing into a
+// message and switching fields are successes; leaving them out made successful
+// dictation show up as failures in the session report.
+const SUCCESS_KINDS = new Set([
+  "done", "answer", "stop", "wrote", "field", "field_written", "composing",
+]);
+
+function didSucceed(result) {
+  if (result.kind === "sequence") {
+    return result.steps.every((s) => !s.step || SUCCESS_KINDS.has(s.kind));
+  }
+  return SUCCESS_KINDS.has(result.kind);
+}
+
 /** Report the full outcome of an utterance. Never allowed to break a command. */
 async function record(entry) {
   try {
@@ -735,7 +749,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
             if (!step.step) continue;
             await record({
               utterance: `${msg.transcript}  ‹step: ${step.step}›`,
-              executed: ["done", "answer", "wrote"].includes(step.kind),
+              executed: SUCCESS_KINDS.has(step.kind),
               outcome: step.kind,
               why: step.decision?.why ?? step.why ?? null,
               detail: step.decision?.detail ?? step.message ?? null,
@@ -745,8 +759,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
         }
         await record({
           utterance: msg.transcript,
-          executed: result.kind === "done" || result.kind === "answer" || result.kind === "stop"
-                 || (result.kind === "sequence" && result.steps.every((x) => !x.step || ["done","answer","wrote"].includes(x.kind))),
+          executed: didSucceed(result),
           outcome: result.kind,
           why: result.decision?.why ?? (result.local ? "local_command" : result.why ?? null),
           detail: result.decision?.detail ?? result.message ?? null,
