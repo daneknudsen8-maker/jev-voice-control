@@ -4,7 +4,7 @@
 import { buildCommandQuestions, matchLocalCommand, matchTabNavigation, resolveCommand, splitSteps } from "./commands.js";
 import { appendChunk, buildDictationQuestions, resolveDictation } from "./dictation.js";
 import { buildComposeQuestions, REPLACES, resolveCompose, spokenEmail } from "./compose.js";
-import { buildTaskQuestions, MAX_STEPS, resolveTaskStep, valueCandidates } from "./task.js";
+import { buildTaskQuestions, dateCandidates, MAX_STEPS, resolveDates, resolveTaskStep, valueCandidates } from "./task.js";
 import "./open-panel.js";
 
 const PROXY = "http://127.0.0.1:8787/systemone";
@@ -509,7 +509,7 @@ async function runSequence(steps, original) {
  * the only thing Jev can usefully answer. Nothing is planned ahead.
  */
 async function runTask(goal, existing = null) {
-  const task = existing ?? { goal, steps: [], startedAt: Date.now() };
+  const task = existing ?? { goal, steps: [], startedAt: Date.now(), dates: resolveDates(goal) };
   const done = (kind, message, extra = {}) => {
     const result = { kind, message, task: { ...task, running: false }, ...extra };
     return result;
@@ -531,9 +531,12 @@ async function runTask(goal, existing = null) {
       return done("task_stopped", `Lost the page: ${error.message}`, { why: "page_unavailable" });
     }
 
-    // Values are enumerated by code; Jev only selects among them.
+    // Values are enumerated by code; Jev only selects among them. Relative
+    // dates are worked out here too, since date arithmetic is not something
+    // Jev does reliably — it gets real days to pick from instead.
     const pageValues = inv.typeables.map((t) => t.text).filter(Boolean);
-    const values = valueCandidates(goal, pageValues);
+    const dates = task.dates ?? resolveDates(goal);
+    const values = valueCandidates(goal, [...pageValues, ...dateCandidates(dates)]);
 
     const state = {
       goal,
@@ -542,10 +545,11 @@ async function runTask(goal, existing = null) {
       elements: inv.elements,
       typeables: inv.typeables,
       history: task.steps.map((s) => s.label),
+      ...(dates.length ? { dates } : {}),
     };
 
     const answers = await askJev(state, buildTaskQuestions({
-      elements: inv.elements, typeables: inv.typeables, values,
+      elements: inv.elements, typeables: inv.typeables, values, dates,
     }));
 
     const step = resolveTaskStep(answers, {

@@ -17,10 +17,10 @@
     </select>
   </header>
 
-  <div id="entry" class="entry" hidden>
-    <input id="command" type="text" placeholder="Hold your Wispr Flow hotkey and speak, or type…"
+  <div id="entry" class="entry">
+    <input id="command" type="text" placeholder="Type a command, or dictate into this box…"
            autocomplete="off" spellcheck="false" aria-label="Command">
-    <p class="entry-hint">Sends on Enter, or when dictation stops. Keep this box focused.</p>
+    <p id="entry-hint" class="entry-hint">Press Enter to send.</p>
   </div>
 
   <p id="heard" class="heard" aria-live="polite"></p>

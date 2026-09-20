@@ -41,7 +41,11 @@ function applyEngine(next) {
   try { localStorage.setItem("jev.engine", next); } catch { /* private window */ }
 
   engineSelect.value = next;
-  entry.hidden = !ENGINES[next].needsInput;
+  // The box stays; only the hint changes, since dictation auto-sends and
+  // typing does not.
+  $("entry-hint").textContent = ENGINES[next].needsInput
+    ? "Sends on Enter, or when dictation stops. Keep this box focused."
+    : "Press Enter to send. The mic runs separately.";
   document.body.classList.toggle("text-engine", next === "text");
   label.textContent = next === "text" ? "Start" : "Start listening";
 
@@ -50,6 +54,20 @@ function applyEngine(next) {
 }
 
 engineSelect.addEventListener("change", (event) => applyEngine(event.target.value));
+
+// The command box works at all times, whichever source is selected and whether
+// or not the mic is running. Enter is handled here so it never depends on a
+// recognizer having been started.
+commandInput.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
+  event.preventDefault();
+  const text = commandInput.value.trim();
+  if (!text) return;
+  commandInput.value = "";
+  heard.textContent = text;
+  heard.classList.add("final");
+  submit(text);
+});
 
 // Wispr Flow types into whatever field has focus. If focus leaves this box
 // while the text engine is on, the next thing dictated lands in the web page

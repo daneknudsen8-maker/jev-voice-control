@@ -117,6 +117,11 @@ That makes the loop **greedy**. It follows an obvious path well. It cannot plan 
 and it cannot improvise when a site does something unexpected. Starting on an unrelated page it will
 search the web for the goal first, then carry on from the results.
 
+**Dates are worked out in code.** "Next week", "this weekend", "on friday", "march 3rd to 7th" become
+real days before Jev sees them, because reading dates as ordered quantities is one of its documented
+weak spots. It then picks that day off the calendar by matching the text — on a September 2026 picker,
+"next week" from a Sunday resolves to the 21st and gets clicked at 0.99 confidence.
+
 **Values are selected, never invented.** For a typing step, code enumerates every phrase in your goal
 and every value already on the page, and Jev picks which one belongs in the field. So "fill this in
 from that email" works, while "write a paragraph about X" does not — there is nothing to select from.
@@ -124,6 +129,9 @@ from that email" works, while "write a paragraph about X" does not — there is 
 **It stops for anything consequential.** Each step is scored 0–3 for how hard it is to undo, and
 anything at 1.5 or above waits for you — booking, paying, submitting, sending. You approve, and the
 loop carries on from there.
+
+The command box in the panel takes typed input at any time, whichever transcript source is selected —
+press Enter to send. Useful for a long goal you would rather not dictate.
 
 | It stops when | |
 |---|---|

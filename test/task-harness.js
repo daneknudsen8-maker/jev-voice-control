@@ -7,7 +7,7 @@
 // against a page, not a whole journey.
 
 import { buildCommandQuestions, resolveCommand } from "../extension/commands.js";
-import { buildTaskQuestions, resolveTaskStep, valueCandidates } from "../extension/task.js";
+import { buildTaskQuestions, dateCandidates, resolveDates, resolveTaskStep, valueCandidates } from "../extension/task.js";
 
 const KEY = process.env.TYPESAFE_API_KEY;
 if (!KEY) { console.error("TYPESAFE_API_KEY not set"); process.exit(1); }
@@ -122,6 +122,43 @@ const PAGES = [
     expect: { action: ["search_web", "type"], stuckOk: true, notDone: true },
   },
 ];
+
+// ------------------------------------------------------------- part three
+// Relative dates: code works out the days, Jev picks one off the calendar.
+
+const DATE_GOAL = "Book me an Airbnb for next week for 7 people in Palm Springs, California.";
+const TODAY = new Date("2026-09-20T12:00:00");   // a Sunday, so "next week" is the 21st
+const DATES = resolveDates(DATE_GOAL, TODAY);
+
+const CAL_DAYS = [];
+for (let d = 18; d <= 30; d++) {
+  CAL_DAYS.push({ id: `d${d}`, text: String(d), kind: "button", where: "main content", position: `${d - 17}th of 13` });
+}
+const CAL_ELEMENTS = [
+  { id: "c0", text: "September 2026", kind: "heading", where: "main content" },
+  ...CAL_DAYS,
+  { id: "c9", text: "Search", kind: "button", where: "main content" },
+];
+const CAL_TYPEABLES = [{ id: "t0", text: "Palm Springs, California", kind: "search input", where: "main content" }];
+
+console.log(`\n\x1b[1mrelative dates — "${DATE_GOAL.slice(0, 44)}…"\x1b[0m\n`);
+check(DATES.length > 0 && DATES[0].start === "2026-09-21", "resolveDates: next week from Sun 20 Sep",
+      `got ${DATES[0]?.start} to ${DATES[0]?.end}`);
+console.log(`  resolved in code: ${DATES[0]?.label} = ${DATES[0]?.start} → ${DATES[0]?.end}`);
+
+{
+  const values = valueCandidates(DATE_GOAL, [...CAL_TYPEABLES.map((t) => t.text), ...dateCandidates(DATES)]);
+  const answers = await ask(
+    { goal: DATE_GOAL, step_number: 3, page: { title: "Airbnb — choose dates" },
+      elements: CAL_ELEMENTS, typeables: CAL_TYPEABLES, dates: DATES,
+      history: ['type "Palm Springs, California" into Where', 'click "Check in"'] },
+    buildTaskQuestions({ elements: CAL_ELEMENTS, typeables: CAL_TYPEABLES, values, dates: DATES }),
+  );
+  const step = resolveTaskStep(answers, { values, history: [], elements: CAL_ELEMENTS, typeables: CAL_TYPEABLES, goal: DATE_GOAL });
+  const mark = check(step.command?.id === "d21", "picks the 21st off the calendar",
+                     `got ${step.command?.id ?? step.do} (${step.label ?? step.detail})`);
+  console.log(`  picked: ${step.label ?? step.detail}  (target ${answers.target?.confidence?.toFixed(2)}) ${mark}`);
+}
 
 console.log(`\n\x1b[1mnext step, given "${GOAL}"\x1b[0m\n`);
 console.log(pad("page", 34), pad("next", 10), pad("conf", 6), pad("goal_met", 9), pad("resolved", 34), "ok");

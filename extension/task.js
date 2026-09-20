@@ -58,7 +58,7 @@ export function valueCandidates(goal, pageValues = []) {
  * One request per step. Every question is about the same page, so they run in
  * parallel; code reads only the ones the chosen action needs.
  */
-export function buildTaskQuestions({ elements, typeables, values }) {
+export function buildTaskQuestions({ elements, typeables, values, dates = [] }) {
   const questions = {
     next_action: {
       type: "choice",
@@ -116,7 +116,10 @@ export function buildTaskQuestions({ elements, typeables, values }) {
       type: "choice",
       instructions: {
         question: "If the next step is to click something, which entry in `elements` moves closest towards `goal`?",
-        focus: "Prefer the element that advances the goal, not merely one that matches its words. Entries are listed in page order and carry a `position` label.",
+        focus: "Prefer the element that advances the goal, not merely one that matches its words. Entries are listed in page order and carry a `position` label."
+          + (dates.length
+            ? " When choosing a day in a calendar, use `dates`: the words in the goal have already been worked out into real dates there, so match those rather than interpreting the words again."
+            : ""),
       },
       criteria: {
         ...Object.fromEntries(elements.map((el) => [el.id, describe(el)])),
@@ -248,4 +251,103 @@ export function resolveTaskStep(answers, { values, history, elements, typeables,
     default:
       return { do: "stuck", why: "unhandled", detail: `no handler for ${action.choice}` };
   }
+}
+
+// --------------------------------------------------------------------------
+// Dates
+//
+// "Next week" has to become actual days before a date picker can be clicked,
+// and Jev reads dates as text rather than ordered quantities — arithmetic on
+// them is documented as unreliable (docs/typesafe/01-limits.md #3). So code
+// works out what the words mean and hands Jev concrete days to select from.
+
+const WEEKDAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+const MONTHS = ["january", "february", "march", "april", "may", "june", "july",
+                "august", "september", "october", "november", "december"];
+
+const iso = (d) => d.toISOString().slice(0, 10);
+const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
+
+/**
+ * Concrete dates implied by a goal, as {label, start, end}. Returns [] when no
+ * date is named — most goals do not involve one.
+ */
+export function resolveDates(goal, today = new Date()) {
+  const said = goal.toLowerCase();
+  const found = [];
+  const base = new Date(today);
+  base.setHours(12, 0, 0, 0);   // midday, so DST cannot shift the day
+
+  if (/\btoday\b/.test(said))     found.push({ label: "today", start: base, end: base });
+  if (/\btomorrow\b/.test(said))  found.push({ label: "tomorrow", start: addDays(base, 1), end: addDays(base, 1) });
+
+  // "next week" = the coming Monday through the Sunday after it.
+  if (/\bnext week\b/.test(said)) {
+    const daysToMonday = (8 - base.getDay()) % 7 || 7;
+    const start = addDays(base, daysToMonday);
+    found.push({ label: "next week", start, end: addDays(start, 6) });
+  }
+  if (/\bthis week\b/.test(said)) {
+    const start = addDays(base, -((base.getDay() + 6) % 7));
+    found.push({ label: "this week", start, end: addDays(start, 6) });
+  }
+  // A weekend is the Friday to the Sunday.
+  if (/\b(?:this |next )?weekend\b/.test(said)) {
+    const nextWeekend = /\bnext weekend\b/.test(said);
+    const daysToFriday = ((5 - base.getDay()) + 7) % 7 || 7;
+    const friday = addDays(base, daysToFriday + (nextWeekend ? 7 : 0));
+    found.push({ label: nextWeekend ? "next weekend" : "this weekend", start: friday, end: addDays(friday, 2) });
+  }
+
+  // "next friday", "this tuesday"
+  for (const [index, name] of WEEKDAYS.entries()) {
+    const m = said.match(new RegExp(`\\b(next|this|on)\\s+${name}\\b`));
+    if (!m) continue;
+    let delta = (index - base.getDay() + 7) % 7;
+    if (delta === 0) delta = 7;
+    if (m[1] === "next" && delta < 7) delta += 7;
+    const day = addDays(base, delta);
+    found.push({ label: `${m[1]} ${name}`, start: day, end: day });
+  }
+
+  // "march 3rd", "march 3 to 7"
+  for (const [index, month] of MONTHS.entries()) {
+    const m = said.match(new RegExp(`\\b${month}\\s+(\\d{1,2})(?:\\s*(?:st|nd|rd|th))?(?:\\s*(?:to|through|-|–|until)\\s*(?:${month}\\s+)?(\\d{1,2})(?:\\s*(?:st|nd|rd|th))?)?`));
+    if (!m) continue;
+    const year = index < base.getMonth() ? base.getFullYear() + 1 : base.getFullYear();
+    const start = new Date(year, index, Number(m[1]), 12);
+    const end = m[2] ? new Date(year, index, Number(m[2]), 12) : start;
+    found.push({ label: m[0], start, end });
+  }
+
+  return found.map((f) => ({
+    label: f.label,
+    start: iso(f.start),
+    end: iso(f.end),
+    // The formats a date picker actually shows, so Jev has something to match.
+    startText: formats(f.start),
+    endText: formats(f.end),
+  }));
+}
+
+function formats(d) {
+  const month = MONTHS[d.getMonth()];
+  const name = month.charAt(0).toUpperCase() + month.slice(1);
+  return [
+    String(d.getDate()),
+    `${name} ${d.getDate()}`,
+    `${name.slice(0, 3)} ${d.getDate()}`,
+    `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`,
+    iso(d),
+  ];
+}
+
+/** Every concrete date string worth offering as a typeable value. */
+export function dateCandidates(dates) {
+  const out = [];
+  for (const d of dates) {
+    out.push(...d.startText, ...d.endText);
+    if (d.start !== d.end) out.push(`${d.start} to ${d.end}`);
+  }
+  return [...new Set(out)];
 }

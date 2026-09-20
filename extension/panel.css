@@ -8,6 +8,9 @@
           --accent: #60a5fa; --ok: #4ade80; --warn: #fbbf24; --bad: #f87171; --card: #27272a; }
 }
 * { box-sizing: border-box; }
+/* A class rule setting `display` outranks the UA's [hidden] rule, so say it
+   here once rather than discovering it section by section. */
+[hidden] { display: none !important; }
 body {
   margin: 0; padding: 16px; min-width: 320px;
   font: 14px/1.5 system-ui, -apple-system, sans-serif;

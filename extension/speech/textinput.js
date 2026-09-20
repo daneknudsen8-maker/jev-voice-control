@@ -31,12 +31,8 @@ export class TextInputRecognizer {
       this.timer = setTimeout(() => this.#fire(), QUIET_MS);
     };
 
-    this.onKeydown = (event) => {
-      if (event.key !== "Enter" || event.shiftKey) return;
-      event.preventDefault();
-      clearTimeout(this.timer);
-      this.#fire();
-    };
+    // Enter is handled by the panel, so the box works even when no recognizer
+    // is running. This class only owns the "dictation went quiet" case.
   }
 
   available() {
@@ -46,7 +42,6 @@ export class TextInputRecognizer {
   start() {
     this.running = true;
     this.input.addEventListener("input", this.onInput);
-    this.input.addEventListener("keydown", this.onKeydown);
     this.input.disabled = false;
     this.input.focus();
     this.handlers.onListening?.();
@@ -56,7 +51,6 @@ export class TextInputRecognizer {
     this.running = false;
     clearTimeout(this.timer);
     this.input.removeEventListener("input", this.onInput);
-    this.input.removeEventListener("keydown", this.onKeydown);
   }
 
   #fire() {
