@@ -30,7 +30,19 @@ JEV_ALLOWED_EXTENSION_ID=abcdefgh...
 ```
 Restart the proxy. Without it, any extension on your machine can reach the proxy.
 
-**5. Open the panel.** Click the toolbar icon. A small window opens — **keep it open, it holds the
+**5. Pick where transcripts come from** — the dropdown in the panel header:
+
+- **Chrome mic** — Chrome's Web Speech API. No setup, but the accuracy is mediocre on names and
+  jargon, and the audio goes to Google's servers.
+- **Wispr Flow / typing** — the panel shows a command box. Any tool that types into the focused field
+  fills it: [Wispr Flow](https://wisprflow.ai), macOS dictation, or your keyboard. The command sends
+  on Enter, or automatically when dictation stops. Much better accuracy; the cost is that **the box
+  must stay focused**, since that is where the text lands.
+
+The choice is remembered. Both live in `extension/speech/` behind one interface — implement
+`start`/`stop`/`available` to add another.
+
+**6. Open the panel.** Click the toolbar icon. A small window opens — **keep it open, it holds the
 microphone.** Click *Start listening* (or press Space). Grant mic permission when Chrome asks.
 
 ## What you can say
@@ -295,7 +307,7 @@ extension/
   panel.html/.js/.css  mic + transcript + activity log
   compose.js           structured email: field routing, spoken addresses
   dictation.js         writing mode: content vs command, punctuation, appending
-  speech/index.js      swappable STT; webspeech.js is the default
+  speech/index.js      transcript sources: webspeech.js (mic), textinput.js (Wispr Flow)
 test/
   harness.js           browser-free evaluation against live Jev
   dictation-harness.js mode-confusion tests; fails loudly on dangerous misses
@@ -312,9 +324,10 @@ docs/typesafe/         full local TypeSafe docs — read 00-core.md first
 
 ## Known limits
 
-- **Web Speech API sends audio to Google.** That's how Chrome implements it. `speech/index.js` is a
-  swappable interface — implement `start`/`stop`/`available` over local whisper.cpp to keep audio on
-  your machine.
+- **Web Speech API sends audio to Google**, and is weak on names and jargon. The "Wispr Flow / typing"
+  source avoids both, at the cost of keeping the command box focused — if focus moves to the web page,
+  the next thing you dictate is typed into that page instead. The panel warns when the box loses
+  focus, and clicking anywhere in the panel restores it.
 - The panel window must stay open. A popup would close on blur and kill the mic.
 - Same-page only: no iframes (`all_frames: false`), and no `chrome://` pages.
 - Element ids are rebuilt on each utterance. If the page changes between speaking and executing, the
